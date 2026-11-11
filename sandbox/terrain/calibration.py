@@ -62,6 +62,14 @@ def _quad_mask(shape: tuple[int, int], quad: np.ndarray, shrink: float) -> np.nd
 
 
 def detect_box_corners(intrinsics: Intrinsics, depth: np.ndarray, sand_tolerance: float = 0.02) -> np.ndarray | None:
+    """Rohy bedny: nejdřív podle stěn (funguje i s neuhlazeným pískem), pak podle roviny písku."""
+    corners = detect_box_corners_walls(intrinsics, depth)
+    if corners is None:
+        corners = detect_box_corners_plane(intrinsics, depth, sand_tolerance)
+    return corners
+
+
+def detect_box_corners_plane(intrinsics: Intrinsics, depth: np.ndarray, sand_tolerance: float = 0.02) -> np.ndarray | None:
     """Najde vnitřní rohy bedny v hloubkovém obraze (uhlazený písek, Kinect zhruba nad středem).
 
     Proloží rovinu středem obrazu, vezme souvislou oblast „téměř v rovině“ kolem středu
@@ -76,15 +84,29 @@ def detect_box_corners(intrinsics: Intrinsics, depth: np.ndarray, sand_tolerance
     if center.sum() < 1000:
         return None
     rays = intrinsics.rays()
-    normal, offset = fit_plane((rays[center] * depth[center][:, None]).astype(float))
-    h = (rays @ normal) * depth + offset
-    sand = ((np.abs(h) < sand_tolerance) & (depth > 0)).astype(np.uint8)
-    sand = cv2.morphologyEx(sand, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
-    _, labels = cv2.connectedComponents(sand)
-    label = labels[H // 2, W // 2]
-    if label == 0:
-        return None
-    region = (labels == label).astype(np.uint8)
+    fit_mask = center
+    region = None
+    # Rovina se nejdřív proloží středem obrazu, pak opakovaně celou nalezenou oblastí písku –
+    # kopec uprostřed neuhlazeného písku jinak rovinu nakloní a oblast se useknou.
+    for _ in range(4):
+        normal, offset = fit_plane((rays[fit_mask] * depth[fit_mask][:, None]).astype(float))
+        h = (rays @ normal) * depth + offset
+        sand = ((np.abs(h) < sand_tolerance) & (depth > 0)).astype(np.uint8)
+        sand = cv2.morphologyEx(sand, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+        n, labels = cv2.connectedComponents(sand)
+        # Největší rovinná oblast zasahující do středu obrazu (ne nutně přímo středový pixel).
+        counts = np.bincount(labels[center], minlength=n)
+        counts[0] = 0
+        label = int(np.argmax(counts))
+        if label == 0:
+            return None
+        new_region = labels == label
+        if region is not None and (new_region != region).mean() < 0.002:
+            region = new_region
+            break
+        region = new_region
+        fit_mask = region & (depth > 0)
+    region = region.astype(np.uint8)
     contours, _ = cv2.findContours(region, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     hull = cv2.convexHull(max(contours, key=cv2.contourArea))
     peri = cv2.arcLength(hull, True)
@@ -99,6 +121,116 @@ def detect_box_corners(intrinsics: Intrinsics, depth: np.ndarray, sand_tolerance
     # pořadí: vlevo nahoře, vpravo nahoře, vpravo dole, vlevo dole
     s, d = quad.sum(axis=1), quad[:, 0] - quad[:, 1]
     return np.array([quad[np.argmin(s)], quad[np.argmax(d)], quad[np.argmax(s)], quad[np.argmin(d)]])
+
+
+def _walk_to_wall(line: np.ndarray, start: int, direction: int, step_up: float, drop: float,
+                  look: int) -> int | None:
+    """Od `start` jde po profilu výšky, dokud nenarazí na stěnu (prudký schod nahoru)
+    nebo sráz dolů (okraj bedny). Vrací poslední index uvnitř, None = došel na kraj obrazu."""
+    n = len(line)
+    base = np.nanmedian(line[max(0, start - 20):start + 20])
+    i = start
+    while 0 <= i + direction * look < n:
+        j = i + direction * look
+        if not np.isfinite(line[j]) or line[j] - line[i] > step_up or line[j] < base - drop:
+            return i
+        i += direction
+    return None
+
+
+def _fit_edge(pts: np.ndarray, vertical: bool, tol: float = 2.0) -> tuple[float, float] | None:
+    """Robustní přímka hrany stěny (RANSAC): x = a·y + b pro svislou, y = a·x + b pro vodorovnou.
+    Body, kde skenování zastavil svah kopce místo stěny, vypadnou jako odlehlé."""
+    if len(pts) < 20:
+        return None
+    x, y = (pts[:, 1], pts[:, 0]) if vertical else (pts[:, 0], pts[:, 1])
+    rng = np.random.default_rng(0)
+    best = None
+    for _ in range(300):
+        i, j = rng.choice(len(x), 2, replace=False)
+        if x[i] == x[j]:
+            continue
+        a = (y[j] - y[i]) / (x[j] - x[i])
+        if abs(a) > 0.5:  # hrana bedny je v obraze zhruba svislá / vodorovná
+            continue
+        inl = np.abs(y - (a * x + (y[i] - a * x[i]))) < tol
+        if best is None or inl.sum() > best.sum():
+            best = inl
+    if best is None or best.sum() < max(20, 0.3 * len(x)):
+        return None
+    a, b = np.polyfit(x[best], y[best], 1)
+    return float(a), float(b)
+
+
+def detect_box_corners_walls(intrinsics: Intrinsics, depth: np.ndarray, step_up: float = 0.04,
+                             drop: float = 0.12) -> np.ndarray | None:
+    """Najde rohy bedny podle vnitřních hran stěn – písek nemusí být uhlazený.
+
+    Z prostředka obrazu jde po řádcích a sloupcích ven, dokud nenarazí na stěnu (výška
+    skočí o víc než `step_up` na pár pixelech; kopce v písku jsou pozvolnější) nebo na
+    sráz. Body hran proloží přímkami (RANSAC) a rohy jsou jejich průsečíky – roh smí
+    ležet i kousek mimo záběr Kinectu. Pořadí rohů jako u `detect_box_corners_plane`.
+    """
+    H, W = depth.shape
+    valid = depth > 0
+    center = np.zeros(depth.shape, bool)
+    center[H // 4: 3 * H // 4, W // 4: 3 * W // 4] = True
+    center &= valid
+    if center.sum() < 1000:
+        return None
+    rays = intrinsics.rays()
+    pts = rays * depth[..., None]
+    normal, offset = fit_plane(pts[center].astype(float))
+    h = cv2.GaussianBlur((pts @ normal + offset).astype(np.float32), (3, 3), 0)
+    h = np.where(valid, h, np.nan)
+    look = 3
+    cu, cv_ = W // 2, H // 2
+    sides: dict[str, list[tuple[float, float]]] = {"left": [], "right": [], "top": [], "bottom": []}
+    for v in range(H // 6, H - H // 6, 2):
+        for side, d in (("left", -1), ("right", 1)):
+            u = _walk_to_wall(h[v], cu, d, step_up, drop, look)
+            if u is not None:
+                sides[side].append((u, v))
+    for u in range(W // 6, W - W // 6, 2):
+        for side, d in (("top", -1), ("bottom", 1)):
+            v = _walk_to_wall(h[:, u], cv_, d, step_up, drop, look)
+            if v is not None:
+                sides[side].append((u, v))
+    lines = {}
+    for side in sides:
+        lines[side] = _fit_edge(np.array(sides[side], float).reshape(-1, 2), side in ("left", "right"))
+        if lines[side] is None:
+            return None
+
+    def cross(vert, horiz):  # x = a1·y + b1  ∩  y = a2·x + b2
+        (a1, b1), (a2, b2) = vert, horiz
+        x = (a1 * b2 + b1) / (1 - a1 * a2)
+        return np.array([x, a2 * x + b2])
+
+    quad = np.array([cross(lines["left"], lines["top"]), cross(lines["right"], lines["top"]),
+                     cross(lines["right"], lines["bottom"]), cross(lines["left"], lines["bottom"])])
+    # rozumnost: velká plocha, rohy nejvýš kousek za okrajem záběru
+    if cv2.contourArea(quad.astype(np.float32)) < 0.25 * H * W:
+        return None
+    if np.any(quad < -0.1 * np.array([W, H])) or np.any(quad > 1.1 * np.array([W, H])):
+        return None
+    return quad
+
+
+def unmirror_corners(intrinsics: Intrinsics, corners_px: np.ndarray, normal: np.ndarray) -> np.ndarray:
+    """Pořadí rohů tak, aby plátno nebylo zrcadlově (obraz z libfreenect2 je zrcadlený).
+
+    Osy bedny x (roh 1→2), y (roh 1→4) a normála ke Kinectu musí tvořit pravotočivou
+    soustavu – jinak se prohodí rohy 1↔2 a 4↔3. Na kterou stranu bedny je plátno
+    otočené, se tím nemění (to jde případně otočit přečíslováním o 180°)."""
+    c = np.asarray(corners_px, float).reshape(4, 2)
+    rays = np.column_stack([(c[:, 0] - intrinsics.cx) / intrinsics.fx, (c[:, 1] - intrinsics.cy) / intrinsics.fy,
+                            np.ones(4)])
+    ex, ey = rays[1] - rays[0], rays[3] - rays[0]
+    n = np.asarray(normal, float)
+    if n[2] > 0:  # normála má mířit ke Kinectu (z < 0 v souřadnicích kamery)
+        n = -n
+    return c[[1, 0, 3, 2]] if float(np.cross(ex, ey) @ n) < 0 else c
 
 
 @dataclass
