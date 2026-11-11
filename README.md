@@ -112,7 +112,22 @@ Nástroj `build/kinect2_bridge/kinect2_snap` (barva srovnaná s hloubkou) se ses
     Telefon musí být ve stejné síti jako počítač; otevři port: `sudo firewall-cmd --add-port=8765/tcp`.
 13. **Nejvyšší hora** – minutová soutěž, rekord dne a všech dob; V = nejhlubší propast.
 
-Mód 10 = klávesa 0, módy 11–13 = Shift+1 až Shift+3, Tab = další; v okně obsluhy jdou všechny vybrat klikem. Úvodní slajd každého módu vysvětlí návštěvníkům, co dělat.
+**Hry pro dva hráče** – bedna je čarou rozdělená přes střed delší strany, každý hráč stojí u své
+kratší strany (červení vlevo, modří vpravo na plátně) a texty má otočené k sobě:
+
+14. **Vodní válka** – uprostřed vyvěrá voda, každý má u své strany vesnici s 5 domky. Hráze k sobě,
+    koryta k soupeři; prohrává ten, komu se zatopí všechny domky. Pramen postupně sílí, po 2 minutách
+    vyhrává víc suchých domků. Enter = pustit vodu hned, ↑↓ síla pramene.
+15. **Král kopce** – 60 s kolo (začne, když někdo sáhne do písku); body dostává ten, kdo má ve své
+    půlce nejvyšší vrchol. Pás 3 cm u čáry je neutrální.
+16. **Potopa ostrovů** – 20 s na stavbu ostrovů, pak stoupá moře (čím dál rychleji). Vyhrává poslední
+    ostrov nad hladinou (ostrov = aspoň ~20 cm² souše v hráčově půlce). ↑↓ rychlost moře.
+17. **Modeluj podle předlohy** – hnědé vrstevnice předlohy, průběžná shoda v %. **P přepíná 1/2 hráče:**
+    dva hráči závodí, každý na své půlce se stejnou předlohou otočenou k sobě (přísné hodnocení, cíl 80 %).
+    Jeden hráč má celou bednu, barevnou nápovědu a **mírné hodnocení** – počítá se hlavně tvar
+    (kopec smí být nižší nebo vyšší, drobné hrbolky nevadí), cíl 60 %. M = nápověda, ←→ předloha.
+
+Mód 10 = klávesa 0, módy 11–17 = Shift+1 až Shift+7, Tab = další; v okně obsluhy jdou všechny vybrat klikem. Úvodní slajd každého módu vysvětlí návštěvníkům, co dělat.
 
 Vlastní předlohy: PNG v šedi (bílá = nejvýš) do složky `targets/`.
 

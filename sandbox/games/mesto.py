@@ -57,6 +57,61 @@ void main() {
 PLAN, PREP, FLOOD, RESULT = "plánování", "příprava", "povodeň", "výsledek"
 
 
+def draw_house(p, h: eco.House, sx: float, sy: float, clock: float, saved_ring: bool = False,
+               ring_color=(0.2, 1.0, 0.35, 0.95)) -> None:
+    """Domek se sedlovou střechou (kostel s věží); zatopený bliká červeně, zachráněný má zelený kruh."""
+    cx, cy = h.x * sx, h.y * sy
+    c, s = math.cos(h.angle), math.sin(h.angle)
+    L, W = h.length * sx / 2, h.width * sy / 2
+
+    def tr(pts):
+        pts = np.asarray(pts, float)
+        return np.stack([cx + pts[:, 0] * c - pts[:, 1] * s, cy + pts[:, 0] * s + pts[:, 1] * c], 1)
+
+    flooded = h.flooded
+    since = clock - h.flooded_at
+    if flooded:
+        roof_a, roof_b = (0.35, 0.45, 0.75, 1), (0.22, 0.30, 0.60, 1)
+    elif h.church:
+        roof_a, roof_b = (0.95, 0.75, 0.25, 1), (0.75, 0.52, 0.12, 1)
+    else:
+        roof_a, roof_b = (1.0, 0.30, 0.12, 1), (0.72, 0.16, 0.06, 1)
+    # stín a obrys
+    p.triangles(tr([[-L, -W], [L, -W], [L, W], [-L, -W], [L, W], [-L, W]]) + [W * 0.35, W * 0.5], (0, 0, 0, 0.45))
+    o = 1.12
+    p.triangles(tr([[-L * o, -W * o], [L * o, -W * o], [L * o, W * o], [-L * o, -W * o], [L * o, W * o],
+                    [-L * o, W * o]]), (0.1, 0.05, 0.02, 1))
+    # dvě poloviny sedlové střechy (světlejší je ta ke světlu)
+    p.triangles(tr([[-L, -W], [L, -W], [L, 0], [-L, -W], [L, 0], [-L, 0]]), roof_a)
+    p.triangles(tr([[-L, 0], [L, 0], [L, W], [-L, 0], [L, W], [-L, W]]), roof_b)
+    p.polyline(tr([[-L, 0], [L, 0]]), (0.25, 0.08, 0.02, 1), width=max(1.5, W * 0.15))
+    if h.church:
+        t = W * 0.95  # věž s křížem
+        tx = L + t * 0.9
+        p.triangles(tr([[tx - t, -t], [tx + t, -t], [tx + t, t], [tx - t, -t], [tx + t, t], [tx - t, t]]),
+                    (0.1, 0.05, 0.02, 1))
+        t2 = t * 0.82
+        p.triangles(tr([[tx, 0], [tx - t2, -t2], [tx + t2, -t2]]), roof_a)
+        p.triangles(tr([[tx, 0], [tx + t2, -t2], [tx + t2, t2]]), roof_a)
+        p.triangles(tr([[tx, 0], [tx + t2, t2], [tx - t2, t2]]), roof_b)
+        p.triangles(tr([[tx, 0], [tx - t2, t2], [tx - t2, -t2]]), roof_b)
+        p.polyline(tr([[tx - t * 0.5, 0], [tx + t * 0.5, 0]]), (1, 1, 1, 1), width=max(2, t * 0.2))
+        p.polyline(tr([[tx, -t * 0.5], [tx, t * 0.5]]), (1, 1, 1, 1), width=max(2, t * 0.2))
+    else:
+        p.triangles(tr([[L * 0.35, -W * 0.75], [L * 0.6, -W * 0.75], [L * 0.6, -W * 0.4], [L * 0.35, -W * 0.75],
+                        [L * 0.6, -W * 0.4], [L * 0.35, -W * 0.4]]), (0.3, 0.12, 0.08, 1))  # komín
+    R = max(L, W) * 1.5
+    if flooded:
+        # červený blikající kruh + šplouchnutí
+        blink = 0.55 + 0.45 * math.sin(clock * 7)
+        p.circle(cx, cy, R, (1.0, 0.1, 0.1, blink), width=max(3, R * 0.14))
+        if since < 1.5:
+            f = since / 1.5
+            p.circle(cx, cy, R * (1 + 1.5 * f), (0.8, 0.95, 1, 1 - f), width=max(2, R * 0.12))
+    elif saved_ring:
+        p.circle(cx, cy, R, ring_color, width=max(3, R * 0.14))
+
+
 class TownGame(Game):
     id = "mesto"
     title = "Záchrana města"
@@ -266,56 +321,7 @@ class TownGame(Game):
             self._draw_house(p, h, sx, sy)
 
     def _draw_house(self, p, h: eco.House, sx: float, sy: float) -> None:
-        cx, cy = h.x * sx, h.y * sy
-        c, s = math.cos(h.angle), math.sin(h.angle)
-        L, W = h.length * sx / 2, h.width * sy / 2
-
-        def tr(pts):
-            pts = np.asarray(pts, float)
-            return np.stack([cx + pts[:, 0] * c - pts[:, 1] * s, cy + pts[:, 0] * s + pts[:, 1] * c], 1)
-
-        flooded = h.flooded
-        since = self.clock - h.flooded_at
-        if flooded:
-            roof_a, roof_b = (0.35, 0.45, 0.75, 1), (0.22, 0.30, 0.60, 1)
-        elif h.church:
-            roof_a, roof_b = (0.95, 0.75, 0.25, 1), (0.75, 0.52, 0.12, 1)
-        else:
-            roof_a, roof_b = (1.0, 0.30, 0.12, 1), (0.72, 0.16, 0.06, 1)
-        # stín a obrys
-        p.triangles(tr([[-L, -W], [L, -W], [L, W], [-L, -W], [L, W], [-L, W]]) + [W * 0.35, W * 0.5], (0, 0, 0, 0.45))
-        o = 1.12
-        p.triangles(tr([[-L * o, -W * o], [L * o, -W * o], [L * o, W * o], [-L * o, -W * o], [L * o, W * o],
-                        [-L * o, W * o]]), (0.1, 0.05, 0.02, 1))
-        # dvě poloviny sedlové střechy (světlejší je ta ke světlu)
-        p.triangles(tr([[-L, -W], [L, -W], [L, 0], [-L, -W], [L, 0], [-L, 0]]), roof_a)
-        p.triangles(tr([[-L, 0], [L, 0], [L, W], [-L, 0], [L, W], [-L, W]]), roof_b)
-        p.polyline(tr([[-L, 0], [L, 0]]), (0.25, 0.08, 0.02, 1), width=max(1.5, W * 0.15))
-        if h.church:
-            t = W * 0.95  # věž s křížem
-            tx = L + t * 0.9
-            p.triangles(tr([[tx - t, -t], [tx + t, -t], [tx + t, t], [tx - t, -t], [tx + t, t], [tx - t, t]]),
-                        (0.1, 0.05, 0.02, 1))
-            t2 = t * 0.82
-            p.triangles(tr([[tx, 0], [tx - t2, -t2], [tx + t2, -t2]]), roof_a)
-            p.triangles(tr([[tx, 0], [tx + t2, -t2], [tx + t2, t2]]), roof_a)
-            p.triangles(tr([[tx, 0], [tx + t2, t2], [tx - t2, t2]]), roof_b)
-            p.triangles(tr([[tx, 0], [tx - t2, t2], [tx - t2, -t2]]), roof_b)
-            p.polyline(tr([[tx - t * 0.5, 0], [tx + t * 0.5, 0]]), (1, 1, 1, 1), width=max(2, t * 0.2))
-            p.polyline(tr([[tx, -t * 0.5], [tx, t * 0.5]]), (1, 1, 1, 1), width=max(2, t * 0.2))
-        else:
-            p.triangles(tr([[L * 0.35, -W * 0.75], [L * 0.6, -W * 0.75], [L * 0.6, -W * 0.4], [L * 0.35, -W * 0.75],
-                            [L * 0.6, -W * 0.4], [L * 0.35, -W * 0.4]]), (0.3, 0.12, 0.08, 1))  # komín
-        R = max(L, W) * 1.5
-        if flooded:
-            # červený blikající kruh + šplouchnutí
-            blink = 0.55 + 0.45 * math.sin(self.clock * 7)
-            p.circle(cx, cy, R, (1.0, 0.1, 0.1, blink), width=max(3, R * 0.14))
-            if since < 1.5:
-                f = since / 1.5
-                p.circle(cx, cy, R * (1 + 1.5 * f), (0.8, 0.95, 1, 1 - f), width=max(2, R * 0.12))
-        elif self.phase == RESULT:
-            p.circle(cx, cy, R, (0.2, 1.0, 0.35, 0.95), width=max(3, R * 0.14))
+        draw_house(p, h, sx, sy, self.clock, saved_ring=self.phase == RESULT)
 
     def _text_size(self, scale: float = 1.0) -> int:
         ch = self.host.canvas_size[1]

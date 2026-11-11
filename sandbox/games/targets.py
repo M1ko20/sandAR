@@ -138,3 +138,44 @@ def evaluate(current: np.ndarray, target: np.ndarray, tolerance: float, border: 
     score = float(np.clip(1 - rmse / baseline, 0, 1) * 100)
     within = float(np.mean(np.abs(d) <= tolerance) * 100)
     return Score(score, within, rmse, offset), diff.astype(np.float32)
+
+
+def evaluate_shape(current: np.ndarray, target: np.ndarray, border: float = 0.05, sigma: float = 2.0,
+                   scale: tuple[float, float] = (0.6, 1.4)) -> tuple[Score, np.ndarray]:
+    """Mírné hodnocení (pro jednoho hráče): počítá hlavně tvar, ne přesnou výšku.
+
+    Oba povrchy se vyhladí (drobné hrbolky nevadí) a předloha se smí natáhnout nebo
+    zmenšit v rozsahu ``scale`` – kopec poloviční výšky tak dostane většinu bodů.
+    Skóre = 1 − RMSE / RMS(předlohy po škálování): rovný písek 0 %, správný tvar 100 %.
+    Vrací (skóre, rozdíl current − (a·target + posun)) jako ``evaluate``.
+    """
+    gh, gw = target.shape
+    by, bx = int(gh * border), int(gw * border)
+    inner = (slice(by, gh - by or None), slice(bx, gw - bx or None))
+    c = cv2.GaussianBlur(np.asarray(current, np.float32), (0, 0), sigma)[inner]
+    t = cv2.GaussianBlur(np.asarray(target, np.float32), (0, 0), sigma)[inner]
+    cm, tm = float(c.mean()), float(t.mean())
+    c0, t0 = c - cm, t - tm
+    tt = float(np.sum(t0 * t0)) or 1e-12
+    a = float(np.clip(np.sum(c0 * t0) / tt, *scale))
+    resid = c0 - a * t0
+    rmse = float(np.sqrt(np.mean(resid**2)))
+    baseline = a * float(np.sqrt(tt / t0.size)) or 1e-6
+    score = float(np.clip(1 - rmse / baseline, 0, 1) * 100)
+    offset = cm - a * tm
+    diff = (current - (a * target + offset)).astype(np.float32)
+    within = float(np.mean(np.abs(resid) <= 0.03) * 100)
+    return Score(score, within, rmse, offset), diff
+
+
+def half_grid(target: Target, shape: tuple[int, int], box_size: tuple[float, float], relief: float,
+              player: int) -> np.ndarray:
+    """Předloha pro půlku bedny (``shape`` = mřížka půlky), otočená k hráči u kratší strany.
+
+    Předloha se spočítá z pohledu hráče (šířka = kratší strana bedny, hloubka = půlka delší)
+    a otočí se do souřadnic plátna. Hráč 1 dostane stejnou předlohu otočenou o 180°.
+    """
+    gh, gw = shape
+    own = target.grid((gw, gh), (box_size[1], box_size[0] / 2), relief)  # řádek 0 = nejdál od hráče
+    left = np.ascontiguousarray(own[::-1, :].T)  # hráč 0 stojí u x = 0, jeho pravá ruka míří k +y
+    return left if player == 0 else np.ascontiguousarray(left[::-1, ::-1])

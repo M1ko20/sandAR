@@ -47,6 +47,8 @@ zbytečné závislosti; config jsou dataclassy + JSON.
 - Log do `logs/`, systemd user služba (`scripts/install_service.sh`), KDE pravidlo okna obsluhy
 - Módy: topo, mapa, výška, předloha, voda, kulička (minigolf), poklad, sopka, tsunami,
   ekosystém, záchrana města, digitální otisk (QR), nejvyšší hora / nejhlubší propast
+- Hry pro dva hráče (`games/versus.py` = půlky, dělicí čára, text otočený k hráči u kratší strany):
+  vodní válka, král kopce, potopa ostrovů, modeluj podle předlohy (P = 1 hráč s mírným hodnocením)
 
 ## Zbývá (podle priority)
 

@@ -147,26 +147,52 @@ class Painter:
         self._tprog["u_mode"].value = 1 if gray else 0
         self._tvao.render(moderngl.TRIANGLES, vertices=6)
 
+    def quad(self, tex: moderngl.Texture, corners, tint: Color = (1, 1, 1, 1)) -> None:
+        """Obrázek do libovolného čtyřúhelníku: rohy (levý horní, pravý horní, pravý dolní, levý dolní)."""
+        c = np.asarray(corners, np.float32).reshape(4, 2)
+        uv = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], np.float32)
+        idx = [0, 1, 2, 0, 2, 3]
+        data = np.hstack([c[idx], uv[idx]]).astype(np.float32)
+        self._tvbo.write(data.tobytes())
+        tex.use(0)
+        self._tprog["u_tex"].value = 0
+        self._tprog["u_tint"].value = tuple(float(v) for v in tint)
+        self._tprog["u_mode"].value = 0
+        self._tvao.render(moderngl.TRIANGLES, vertices=6)
+
     def text(self, s: str, x: float, y: float, size: int = 24, color: Color = (1, 1, 1, 1),
              anchor: str = "tl", bold: bool = False, outline: int = 0, outline_color: Color = (0, 0, 0, 1),
-             background: Color | None = None, padding: float = 6, alpha: float = 1.0) -> tuple[float, float]:
+             background: Color | None = None, padding: float = 6, alpha: float = 1.0,
+             rotation: float = 0.0) -> tuple[float, float]:
         """Vykreslí text. anchor = 2 znaky: t/m/b (svisle) + l/c/r (vodorovně). Vrací (šířka, výška).
 
-        `alpha` prolíná celý text (pro animace) – na rozdíl od alfy v `color` nevytváří novou texturu."""
+        `alpha` prolíná celý text (pro animace) – na rozdíl od alfy v `color` nevytváří novou texturu.
+        `rotation` [°] otočí text kolem bodu (x, y) po směru hodinových ručiček (90 = horní okraj
+        textu míří doprava, čte ho tedy člověk stojící u levé hrany plátna)."""
         if not s:
             return 0.0, 0.0
         c255 = tuple(int(round(v * 255)) for v in color)
         o255 = tuple(int(round(v * 255)) for v in outline_color)
         tex = self.text_cache.get(s, int(size), c255, bold, outline, o255)
         w, h = tex.size
-        if anchor[0] == "m":
-            y -= h / 2
-        elif anchor[0] == "b":
-            y -= h
-        if anchor[1] == "c":
-            x -= w / 2
-        elif anchor[1] == "r":
-            x -= w
+        ox = -w / 2 if anchor[1] == "c" else -w if anchor[1] == "r" else 0.0
+        oy = -h / 2 if anchor[0] == "m" else -h if anchor[0] == "b" else 0.0
+        if rotation:
+            a = math.radians(rotation)
+            rot = np.array([[math.cos(a), -math.sin(a)], [math.sin(a), math.cos(a)]], np.float32)
+
+            def corners(pad: float) -> np.ndarray:
+                local = np.array([[ox - pad, oy - pad], [ox + w + pad, oy - pad], [ox + w + pad, oy + h + pad],
+                                  [ox - pad, oy + h + pad]], np.float32)
+                return local @ rot.T + np.array([x, y], np.float32)
+
+            if background is not None:
+                c = corners(padding)
+                self.triangles(c[[0, 1, 2, 0, 2, 3]], background)
+            self.quad(tex, corners(0.0), tint=(1, 1, 1, alpha))
+            return float(w), float(h)
+        x += ox
+        y += oy
         if background is not None:
             self.rect(x - padding, y - padding, w + 2 * padding, h + 2 * padding, background)
         self.image(tex, x, y, w, h, tint=(1, 1, 1, alpha))
