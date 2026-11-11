@@ -168,3 +168,40 @@ def test_unmirror_corners_makes_box_axes_right_handed(sim):
         cal = KinectCalibration.from_plane(sim.intrinsics, normal, offset, fixed)
         n = cal.normal if cal.normal[2] < 0 else -cal.normal
         assert np.cross(cal.ex, cal.ey) @ n > 0
+
+
+def _contour_flips(proc, sim, frames: int = 60) -> float:
+    """Průměrný počet buněk, které mezi snímky přeskočí přes vrstevnici (po 1 cm)."""
+    hs = np.stack([proc.process(sim.render_depth(noise=True)).heights.copy() for _ in range(frames)])
+    band = np.floor(hs[:, 8:-8, 8:-8] / 0.01)
+    return float((np.diff(band, axis=0) != 0).sum(axis=(1, 2)).mean())
+
+
+def test_window_filter_calms_contours_on_static_sand():
+    results = {}
+    for name, kw in (("off", dict(temporal_window=1, hysteresis=0.0)), ("on", {})):
+        sim = SimulatedSensor(seed=1)
+        sim.randomize()
+        normal, offset, corners = sim.ground_truth()
+        proc = TerrainProcessor(KinectCalibration.from_plane(sim.intrinsics, normal, offset, corners),
+                                TerrainSettings(grid_width=128, **kw))
+        for _ in range(40):  # ustálení
+            proc.process(sim.render_depth(noise=True))
+        results[name] = _contour_flips(proc, sim)
+    assert results["on"] < results["off"] / 5
+
+
+def test_window_filter_does_not_leak_passing_hand(sim):
+    normal, offset, corners = sim.ground_truth()
+    cal = KinectCalibration.from_plane(sim.intrinsics, normal, offset, corners)
+    sim.flatten()
+    proc = TerrainProcessor(cal, TerrainSettings(grid_width=128))
+    for _ in range(15):
+        proc.process(sim.render_depth(noise=True))
+    for _ in range(5):  # ruka 10 cm nad pískem projede
+        hand = sim.render_depth(noise=True)
+        hand[150:260, 200:300] -= 0.10
+        proc.process(hand)
+    for _ in range(20):
+        hm = proc.process(sim.render_depth(noise=True))
+    assert np.abs(hm.heights[8:-8, 8:-8]).max() < 0.004

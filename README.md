@@ -145,6 +145,12 @@ jsou v `sandbox/config.py`):
 }
 ```
 
+**Chvějí se vrstevnice na klidném písku?** Proti šumu Kinectu jsou dvě volby v `terrain`:
+`temporal_window` (kolik posledních snímků se průměruje, výchozí 12 ≈ 0,4 s; 1 = vypnuto) a
+`hysteresis` (menší změny výšky se ignorují, výchozí 0.0015 = 1,5 mm). Když se to pořád
+chvěje, zvyš `hysteresis` na 0.002–0.003, případně `temporal_window` na 20. Velké změny
+(hrabání rukou) tím nezpomalíš, jen se pomaleji propíšou jemné úpravy.
+
 ## Architektura
 
 ```

@@ -5,8 +5,11 @@ Kroky pro každý snímek:
 1. pixely -> 3D body -> (x, y, h) v souřadnicích bedny (přesná perspektiva Kinectu),
 2. rozprostření do mřížky (průměr bodů v buňce),
 3. vyřazení rukou/předmětů (příliš vysoko nad pískem),
-4. časový filtr: malé změny = šum (vyhladit), velké změny se přijmou až když
-   vydrží několik snímků (ruka, která jen projíždí, se do terénu nepropíše),
+4. časový filtr: malé změny = šum. Ty se berou z klouzavého okna posledních N snímků
+   (průměr bez nejvyšší a nejnižší hodnoty) a změny pod ``hysteresis`` se ignorují,
+   aby se vrstevnice na klidném písku nechvěly. Velké změny se přijmou až když
+   vydrží několik snímků (ruka, která jen projíždí, se do terénu nepropíše) –
+   okno je nezdržuje, po přijetí se na novou výšku přenastaví,
 5. lehké prostorové vyhlazení.
 """
 
@@ -93,11 +96,32 @@ class TerrainProcessor:
         self.state: np.ndarray | None = None
         self._cand = np.zeros((self.gh, self.gw), np.float32)
         self._count = np.zeros((self.gh, self.gw), np.int16)
+        self.window = max(1, int(settings.temporal_window))
+        self._buf: np.ndarray | None = None  # (N, GH, GW) poslední měření, kruhově
+        self._buf_i = 0
         self.last_coverage = 0.0
         self.last_ms = 0.0
 
     def reset(self) -> None:
         self.state = None
+        self._buf = None
+
+    def _window_filter(self, meas: np.ndarray, use: np.ndarray) -> np.ndarray:
+        """Klouzavý průměr posledních N měření buňky bez nejvyšší a nejnižší hodnoty.
+
+        Buňka, kde ``use`` není, převezme do okna svou předchozí hodnotu."""
+        n = self.window
+        if n < 3:
+            return meas
+        buf = self._buf
+        if buf is None:
+            buf = self._buf = np.repeat(np.where(use, meas, self.state)[None], n, axis=0)
+            self._buf_i = 0
+        else:
+            prev = buf[self._buf_i]
+            self._buf_i = (self._buf_i + 1) % n
+            buf[self._buf_i] = np.where(use, meas, prev)
+        return (buf.sum(axis=0) - buf.max(axis=0) - buf.min(axis=0)) / (n - 2)
 
     # ------------------------------------------------------------------------
     def measure(self, depth: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -153,7 +177,11 @@ class TerrainProcessor:
         state, cand, count = self.state, self._cand, self._count
         diff = meas - state
         small = valid & (np.abs(diff) < s.noise_threshold)
-        state[small] += s.smoothing * diff[small]
+        # Do okna jdou jen malé změny – ruka ani zákmit se do průměru nedostane.
+        filt = self._window_filter(meas, small)
+        fdiff = filt - state
+        move = small & (np.abs(fdiff) > s.hysteresis)  # mrtvé pásmo proti chvění vrstevnic
+        state[move] += s.smoothing * fdiff[move]
         count[small] = 0
 
         big = valid & ~small
@@ -169,6 +197,8 @@ class TerrainProcessor:
         commit = count >= needed
         state[commit] = cand[commit]
         count[commit] = 0
+        if self._buf is not None and commit.any():
+            self._buf[:, commit] = cand[commit]  # okno začne od nové výšky
 
         _replicate_edges(state, ex, ey)
         hands = high | (valid & (meas - state > s.hand_margin) & ~commit)

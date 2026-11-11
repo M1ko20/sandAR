@@ -37,6 +37,8 @@ class TerrainSettings:
     noise_threshold: float = 0.006  # [m] menší změny jsou šum
     stable_frames: int = 8  # kolik snímků musí změna vydržet, než ji přijmeme
     smoothing: float = 0.2  # časové vyhlazení šumu (0..1, víc = rychlejší reakce)
+    temporal_window: int = 12  # [snímky] klouzavé okno na buňku (průměr bez min/max); 1 = vypnuto
+    hysteresis: float = 0.0015  # [m] menší odchylky od zobrazené výšky se ignorují (klidné vrstevnice)
     spatial_sigma: float = 1.0  # [buňky] prostorové vyhlazení
     hand_margin: float = 0.03  # [m] o kolik nad pískem už je to ruka
     edge_margin: float = 0.05  # [m] pás u stěn bedny, kde Kinect vidí stěnu – výška se doplní zevnitř
