@@ -65,6 +65,7 @@ cmake -S "$SRC" -B "$SRC/build" \
       -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
       -DCMAKE_INSTALL_PREFIX="$PREFIX" \
       -DENABLE_CUDA=OFF -DENABLE_OPENCL=OFF -DENABLE_VAAPI=OFF \
+      -DENABLE_CXX11=ON \
       -DBUILD_EXAMPLES=ON \
       "${EXTRA_CMAKE[@]+"${EXTRA_CMAKE[@]}"}"
 cmake --build "$SRC/build" -j "$JOBS"

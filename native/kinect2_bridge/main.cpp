@@ -31,6 +31,10 @@
 #include <thread>
 #include <vector>
 
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+
 namespace {
 
 std::atomic<bool> g_running{true};
@@ -92,6 +96,20 @@ int main(int argc, char **argv) {
   std::signal(SIGTERM, on_signal);
 #ifdef SIGPIPE
   std::signal(SIGPIPE, SIG_IGN);  // zápis do zavřené roury vrátí chybu místo pádu
+#endif
+#ifndef _WIN32
+  // Hlídač rodiče: když Python skončí (i pádem nebo SIGKILL), most nesmí zůstat jako sirotek
+  // a blokovat Kinect (LIBUSB_ERROR_BUSY). Zavřená roura nestačí – když Kinect zrovna
+  // neposílá snímky, most na zápis vůbec nedojde.
+  if (!list_only) {
+    const pid_t parent = getppid();
+    std::thread([parent] {
+      while (true) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        if (getppid() != parent) std::_Exit(0);
+      }
+    }).detach();
+  }
 #endif
 
   libfreenect2::setGlobalLogger(libfreenect2::createConsoleLogger(libfreenect2::Logger::Warning));
@@ -176,6 +194,12 @@ int main(int argc, char **argv) {
     ++seq;
   }
 
+  // Python skončil (zavřená roura) nebo došel limit snímků: stop()/close() umí viset,
+  // a pak by most jako sirotek dál blokoval Kinect (LIBUSB_ERROR_BUSY). Stejná pojistka jako u signálu.
+  std::thread([] {
+    std::this_thread::sleep_for(std::chrono::seconds(3));
+    std::_Exit(0);
+  }).detach();
   dev->stop();
   dev->close();
   delete dev;
