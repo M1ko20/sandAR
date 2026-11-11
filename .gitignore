@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+build/
+third_party/
+recordings/
+snapshots/
+config/calibration_*.json
+config/settings.json
+*.egg-info/
+.DS_Store
