@@ -93,6 +93,7 @@ class CalibrationMode:
         self.active = False
         self.capturing = False
         app.proj_win.set_cursor_visible(False)
+        app.calibration_left()
 
     # --- logika -----------------------------------------------------------------------
     def update(self) -> None:

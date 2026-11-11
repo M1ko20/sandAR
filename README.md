@@ -59,6 +59,11 @@ vyfotí promítnutou 10cm mřížku a vrstevnice po 2 cm proti vrstevnicím spo�
 (`kontrola_vrstevnice.png`: zelená = promítnuto, červená = skutečný terén – mají se krýt).
 Typický výsledek: medián chyby 2–3 mm, na kopcích bez korekce paralaxy by to byly 3–4 cm.
 
+**Hrací plocha:** z bedny se automaticky vyřízne obdélník bez úkosu stěn (Kinect tam měří
+falešně, projekce by padala na stěny) a jen tam, kam projektor dosvítí. Plátno = tato plocha,
+takže mapy, texty i hry jsou vždy celé na písku. Okraje se měří při `autocalibrate`;
+po přestavění bedny nebo posunu projektoru stačí `python -m sandbox fitarea` (pár sekund).
+
 Nástroj `build/kinect2_bridge/kinect2_snap` (barva srovnaná s hloubkou) se sestaví spolu s mostem.
 
 ## Ruční kalibrace (klávesa C)
@@ -123,8 +128,7 @@ Celkový posun výšky se neodečítá do chyby (množství písku žák neovliv
 * Chyba v jednom módu instalaci neshodí – zaloguje se a přepne se na topografii.
 * Log: `logs/piskoviste.log` (rotuje se), v okně obsluhy je stav senzoru, FPS, ruce a odpočet attract mode.
 * Služba s automatickým restartem: `./scripts/install_service.sh` (odebrání `--remove`).
-* Okraj u stěn: Kinect (ToF) u bílých stěn měří falešně vyšší povrch – šířku pásu, který se
-  doplňuje zevnitř, nastav `terrain.edge_margin` (u této bedny 0.09 m v `config/settings.json`).
+* Okraj u stěn řeší hrací plocha (viz kalibrace); `terrain.edge_margin` je už jen malá rezerva.
 
 ## Nastavení
 

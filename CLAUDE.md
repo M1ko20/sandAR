@@ -24,6 +24,8 @@ HeightMap ─► games/<mód>.py ─► plátno (pohled shora) ─► projector/
   nativní Wayland, OpenGL přes vlastní loader).
 * `sandbox/terrain/` – kalibrace Kinectu (rohy podle stěn bedny), `processor.py` (výšková mapa,
   časový filtr, ruce → `hm.hands`, `hm.hand_points`).
+* `sandbox/terrain/playarea.py` – hrací plocha: bedna bez úkosu stěn ∩ obraz projektoru; aplikace
+  pracuje s oříznutou kalibrací, soubor drží celou bednu + okraje (`play_area`).
 * `sandbox/autocal.py` – automatická kalibrace a kontrola přes barevnou kameru Kinectu
   (`build/kinect2_bridge/kinect2_snap`).
 * `sandbox/attract.py` – úvodní slajd módu, attract mode, auto-reset.

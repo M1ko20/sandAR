@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import time
 from pathlib import Path
@@ -13,7 +14,8 @@ from pathlib import Path
 import numpy as np
 
 from .attract import AttractController
-from .calibration_store import calibration_path, load_calibration, save_calibration
+from .calibration_store import calibration_path, load_calibration, load_play_area, save_calibration
+from .terrain import playarea
 from .config import Settings
 from .games import Game, discover_games
 from .projector import ProjectorCalibration, ProjectorCompositor
@@ -39,6 +41,11 @@ class SandboxApp:
         if kinect_cal is None and hasattr(self.sensor, "ground_truth"):
             normal, offset, corners = self.sensor.ground_truth()  # simulace se kalibruje sama
             kinect_cal = KinectCalibration.from_plane(self.sensor.intrinsics, normal, offset, corners)
+        # Celá bedna se pamatuje kvůli kalibraci a ukládání; aplikace pracuje jen s hrací
+        # plochou (bez úkosu stěn a jen tam, kam projektor dosvítí) – viz terrain/playarea.py.
+        self.play_area = load_play_area(self.cal_path)
+        self.full_kc, self.full_pc = kinect_cal, proj_cal
+        kinect_cal, proj_cal = playarea.apply(kinect_cal, proj_cal, self.play_area)
         self.terrain = TerrainService(self.sensor, settings.terrain, kinect_cal)
 
         # okna
@@ -87,7 +94,7 @@ class SandboxApp:
 
         self.select_game(settings.start_game)
         if calibrate or kinect_cal is None:
-            self.calibration.enter()
+            self.enter_calibration()
 
     # --- kalibrace ------------------------------------------------------------------------
     def _configure_host(self) -> None:
@@ -106,7 +113,28 @@ class SandboxApp:
             self.game.start()
 
     def save_calibration(self) -> None:
-        save_calibration(self.cal_path, self.terrain.calibration, self.proj_cal)
+        if self.calibration.active:  # v kalibraci se pracuje s celou bednou
+            self.full_kc, self.full_pc = self.terrain.calibration, copy.deepcopy(self.proj_cal)
+        if self.full_pc is not None:
+            save_calibration(self.cal_path, self.full_kc, self.full_pc, self.play_area)
+
+    def enter_calibration(self) -> None:
+        """Kalibrace se dělá nad celou bednou (rohy u stěn), ne nad oříznutou hrací plochou."""
+        self.proj_win.make_current()
+        if self.full_pc is not None:
+            self.proj_cal = copy.deepcopy(self.full_pc).scaled_to(self.proj_win.framebuffer_size)
+        if self.full_kc is not None and self.full_kc is not self.terrain.calibration:
+            self.set_kinect_calibration(self.full_kc)
+        self.calibration.enter()
+
+    def calibration_left(self) -> None:
+        """Po kalibraci: zapamatovat celou bednu a znovu oříznout na hrací plochu."""
+        self.full_kc, self.full_pc = self.terrain.calibration, copy.deepcopy(self.proj_cal)
+        kc, pc = playarea.apply(self.full_kc, self.full_pc, self.play_area)
+        if pc is not None:
+            self.proj_cal = pc
+        if kc is not self.terrain.calibration:
+            self.set_kinect_calibration(kc)
 
     # --- hry ---------------------------------------------------------------------------------
     def select_game(self, game_id_or_index: str | int) -> None:
@@ -156,7 +184,7 @@ class SandboxApp:
         elif name.isdigit() and name != "0":
             self.select_game(int(name) - 1)
         elif name == "c":
-            self.calibration.enter()
+            self.enter_calibration()
         elif name == "h":
             self.show_help = not self.show_help
         elif name == "z":

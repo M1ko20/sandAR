@@ -24,7 +24,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .calibration_store import calibration_path, load_calibration, save_calibration
+from .calibration_store import calibration_path, load_calibration, load_play_area, save_calibration
+from .config import TerrainSettings
+from .terrain import playarea
 from .config import ROOT, Settings
 from .projector import ProjectorCalibration, ProjectorCompositor
 from .render.host import RenderHost
@@ -308,8 +310,12 @@ def autocalibrate(settings: Settings, grid: tuple[int, int] = (10, 7), progress=
     box_a, proj_a = np.array(box), np.array(proj)
     kx, ky, _ = kc.camera_position_box()
     pc, rms = fit_projector(box_a, proj_a, kc.size, (PW, PH), (kx, ky))
-    save_calibration(calibration_path("kinect2"), kc, pc)
-    return {"box_cm": (W * 100, D * 100), "kinect_cm": kc.offset * 100, "points": len(box_a),
+    area = playarea.PlayArea(estimate_play_margins(kc, depth))
+    save_calibration(calibration_path("kinect2"), kc, pc, area)
+    x0, y0, x1, y1 = playarea.visible_rect(kc, pc, area)
+    return {"play_area_cm": (round((x1 - x0) * 100), round((y1 - y0) * 100)),
+            "okraje_cm": [round(m * 100, 1) for m in area.margins],
+            "box_cm": (W * 100, D * 100), "kinect_cm": kc.offset * 100, "points": len(box_a),
             "rms_px": rms, "projector_height_cm": pc.height * 100, "corners": pc.corners.round(1).tolist()}
 
 
@@ -349,6 +355,8 @@ def check_calibration(settings: Settings, out_dir: Path, n_points: int = 24, pro
     kc, pc = load_calibration(calibration_path("kinect2"))
     if kc is None or pc is None:
         raise CalibrationError("Není uložená kalibrace – spusť autocalibrate")
+    kc, pc = playarea.apply(kc, pc, load_play_area(calibration_path("kinect2")))  # jako aplikace
+    assert kc is not None and pc is not None
     out_dir.mkdir(parents=True, exist_ok=True)
     snap = ColorSnap()
     pw = PatternWindow(settings)
@@ -450,3 +458,30 @@ def _overlay(dark: np.ndarray, lit: np.ndarray) -> np.ndarray:
     lines = _lines_mask(dark, lit)
     base[lines] = (0, 255, 0)
     return base
+
+
+def estimate_play_margins(kc: KinectCalibration, depth: np.ndarray) -> tuple[float, float, float, float]:
+    """Okraje od stěn celé bedny z (průměrovaného) hloubkového snímku."""
+    proc = TerrainProcessor(kc, TerrainSettings(edge_margin=0.0, spatial_sigma=0.0))
+    meas, valid, _ = proc.measure(depth)
+    return playarea.estimate_margins(meas, valid, kc.size)
+
+
+def fit_area(settings: Settings, progress=print) -> dict:
+    """Přeměří jen hrací plochu (okraje od stěn) nad uloženou kalibrací – bez promítání bodů."""
+    path = calibration_path("kinect2")
+    kc, pc = load_calibration(path)
+    if kc is None or pc is None:
+        raise CalibrationError("Není uložená kalibrace – spusť autocalibrate")
+    snap = ColorSnap()
+    try:
+        progress("Měřím okraje u stěn…")
+        depth = snap.grab_depth_median(20)
+    finally:
+        snap.close()
+    area = playarea.PlayArea(estimate_play_margins(kc, depth))
+    save_calibration(path, kc, pc, area)
+    x0, y0, x1, y1 = playarea.visible_rect(kc, pc, area)
+    return {"okraje_cm": [round(m * 100, 1) for m in area.margins],
+            "play_area_cm": (round((x1 - x0) * 100), round((y1 - y0) * 100)),
+            "bedna_cm": (round(kc.size[0] * 100), round(kc.size[1] * 100))}

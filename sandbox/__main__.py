@@ -8,6 +8,7 @@ Příkazy:
   record     nahrát data z Kinectu do souboru
   snapshot   vykreslit všechny hry nad simulací do PNG (bez okna)
   autocalibrate  automatická kalibrace Kinectu i projektoru (barevná kamera Kinectu)
+  fitarea    přeměřit hrací plochu (okraje od stěn bedny) nad uloženou kalibrací
   checkcal   kontrola kalibrace: přesnost v cm + fotky mřížky a vrstevnic (--out složka)
 """
 
@@ -25,7 +26,7 @@ def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python -m sandbox", description="Interaktivní AR pískoviště",
                                 formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
     p.add_argument("command", nargs="?", default="run",
-                   choices=["run", "calibrate", "games", "monitors", "record", "snapshot", "autocalibrate", "checkcal"])
+                   choices=["run", "calibrate", "games", "monitors", "record", "snapshot", "autocalibrate", "checkcal", "fitarea"])
     p.add_argument("--sensor", choices=["auto", "kinect2", "sim", "replay"], help="zdroj hloubky")
     p.add_argument("--replay", metavar="SOUBOR", help="nahrávka pro --sensor replay")
     p.add_argument("--pipeline", choices=["gl", "cpu"], help="dekódování Kinectu v2")
@@ -102,13 +103,15 @@ def main(argv: list[str] | None = None) -> int:
             print(path)
         return 0
 
-    if args.command in ("autocalibrate", "checkcal"):
+    if args.command in ("autocalibrate", "checkcal", "fitarea"):
         import json
 
         from . import autocal
 
         if args.command == "autocalibrate":
             result = autocal.autocalibrate(settings)
+        elif args.command == "fitarea":
+            result = autocal.fit_area(settings)
         else:
             result = autocal.check_calibration(settings, args.out or ROOT / "snapshots" / "kontrola")
         print(json.dumps(result, ensure_ascii=False, indent=2))
