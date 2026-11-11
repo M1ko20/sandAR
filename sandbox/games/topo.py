@@ -43,6 +43,8 @@ class TopoGame(Game):
     title = "Topografická mapa"
     description = "Barvy podle nadmořské výšky, vrstevnice a stínování reliéfu."
     order = 10
+    category = "vizualizace"
+    intro = "Tvaruj krajinu rukama – barvy a vrstevnice ukazují nadmořskou výšku."
     keys = [
         ("K", "vrstevnice zap/vyp"),
         ("S", "stínování zap/vyp"),

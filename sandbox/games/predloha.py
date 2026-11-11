@@ -64,6 +64,8 @@ class ChallengeGame(Game):
     title = "Postav podle předlohy"
     description = "Postav terén podle předlohy, program ukazuje, kde přidat a kde ubrat písek."
     order = 40
+    category = "soutěž"
+    intro = "Červená = přidej, modrá = uber. Postav krajinu podle předlohy!"
     keys = [
         ("← / →", "jiná předloha"),
         ("M", "režim nápověda / mapa"),

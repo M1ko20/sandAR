@@ -12,12 +12,15 @@ from pathlib import Path
 
 import numpy as np
 
+from .attract import AttractController
 from .calibration_store import calibration_path, load_calibration, save_calibration
 from .config import Settings
 from .games import Game, discover_games
 from .projector import ProjectorCalibration, ProjectorCompositor
 from .render.host import RenderHost
-from .render.window import (MOD_SHIFT, Window, find_projector_monitor, poll_events, terminate_glfw)
+from .render.window import (MOD_SHIFT, Window, find_projector_monitor, needs_frame_limit, operator_window_size,
+                            poll_events,
+                            terminate_glfw)
 from .sensor import create_sensor
 from .terrain import KinectCalibration, TerrainService
 from .ui.calibration import CalibrationMode
@@ -43,12 +46,14 @@ class SandboxApp:
         monitor = None if disp.windowed else find_projector_monitor(disp.monitor)
         if monitor is None and not disp.windowed:
             log.warning("Projektor (druhý monitor) nenalezen – projekce poběží v okně")
-        self.proj_win = Window("Pískoviště – projektor", (1280, 800), monitor=monitor, vsync=True,
-                               position=(80, 60))
+        # Operátorské okno vzniká první: na Waylandu nejde okno umístit a kompozitor (KDE)
+        # otevře nové okno na obrazovce s aktivním oknem – po fullscreen projekci by to byl projektor.
         self.op_win = None
         if disp.operator_window:
-            self.op_win = Window("Pískoviště – obsluha", (1280, 780), share=self.proj_win, vsync=False,
+            self.op_win = Window("Pískoviště – obsluha", operator_window_size(), vsync=False,
                                  position=(40, 40))
+        self.proj_win = Window("Pískoviště – projektor", (1280, 800), monitor=monitor, vsync=True,
+                               position=(80, 60), share=self.op_win)
         self.proj_win.set_cursor_visible(monitor is None)
 
         self.host = RenderHost(self.proj_win.ctx, settings)
@@ -63,8 +68,13 @@ class SandboxApp:
         self.game_classes = discover_games()
         self.game: Game | None = None
         self.calibration = CalibrationMode(self)
-        self.operator = OperatorView(self, self.op_win) if self.op_win else None
+        self.operator = None
+        if self.op_win:
+            self.op_win.make_current()  # VAO a programy operátora musí vzniknout v jeho kontextu
+            self.operator = OperatorView(self, self.op_win)
+            self.proj_win.make_current()
         self.show_help = False
+        self.attract = AttractController(settings.attract)
         self.fps = 0.0
         self._quit_armed_until = 0.0
         self._running = True
@@ -112,9 +122,16 @@ class SandboxApp:
             self.game.stop()
         self.proj_win.make_current()
         self.game = cls(self.host)
-        self.game.start()
-        self.host.notify(cls.title, 2.5)
-        log.info("Hra: %s", cls.title)
+        try:
+            self.game.start()
+        except Exception:  # rozbitý mód nesmí shodit celou instalaci
+            log.exception("Mód %s se nepodařilo spustit", cls.id)
+            self.game = None
+            if cls.id != "topo":
+                self.select_game("topo")
+            return
+        self.attract.show_intro(cls)
+        log.info("Mód: %s", cls.title)
 
     def _cycle_game(self, step: int) -> None:
         ids = [c.id for c in self.game_classes]
@@ -124,6 +141,7 @@ class SandboxApp:
     # --- vstup -------------------------------------------------------------------------------
     def on_key(self, name: str, mods: int) -> None:
         shift = bool(mods & MOD_SHIFT)
+        self.attract.poke()
         self.proj_win.make_current()  # hry mohou při stisku vytvářet textury
         if self.calibration.active and self.calibration.key(name, shift):
             return
@@ -149,7 +167,9 @@ class SandboxApp:
         elif name == "n" and hasattr(self.sensor, "randomize"):
             self.sensor.randomize()
         elif self.game is not None:
-            self.game.key(name, shift)
+            if not self.game.key(name, shift) and name == "backspace":
+                self.game.reset()
+                self.host.notify("Nový začátek")
 
     def _projector_mouse(self, kind: str, x: float, y: float, button: int) -> None:
         if self.calibration.active:
@@ -160,6 +180,7 @@ class SandboxApp:
         t_prev = time.monotonic()
         t_end = t_prev + duration if duration else None
         last_seq = -1
+        limit = self.settings.display.max_fps if needs_frame_limit() else 0
         try:
             while self._running and not self.proj_win.should_close() \
                     and not (self.op_win and self.op_win.should_close()):
@@ -173,11 +194,14 @@ class SandboxApp:
                 hm = self.terrain.latest_heightmap()
                 if hm is not None and hm.seq != last_seq:
                     self.host.update_heightmap(hm)
+                    self.attract.observe(hm)
                     last_seq = hm.seq
+                if not self.calibration.active and self.attract.want_switch():
+                    self._attract_next()
                 if self.calibration.active:
                     self.calibration.update()
                 elif self.host.heightmap is not None and self.game is not None:
-                    self.game.update(self.host.heightmap, dt)
+                    self._guarded(self.game.update, self.host.heightmap, dt)
                 if self.operator:
                     self.operator.sculpt(dt)
 
@@ -186,10 +210,37 @@ class SandboxApp:
                     self.operator.render()
                 if t_end and now >= t_end:
                     break
+                if limit:  # Wayland: swap neblokuje, brzdíme na obnovovací frekvenci projektoru
+                    wait = 1.0 / limit - (time.monotonic() - now)
+                    if wait > 0:
+                        time.sleep(wait)
             if snapshot_dir:
                 self.snapshot(snapshot_dir)
         finally:
             self.shutdown()
+
+    def _guarded(self, fn, *args) -> None:
+        """Volání módu: když spadne, zaloguje se a přepne se na bezpečný mód (instalace běží dál)."""
+        try:
+            fn(*args)
+        except Exception:
+            bad = self.game.id if self.game else "?"
+            log.exception("Chyba v módu %s – přepínám na topografii", bad)
+            self.game = None
+            self.select_game("topo" if bad != "topo" else 0)
+
+    def _attract_next(self) -> None:
+        """Attract mode: další ukázkový mód s čistým světem."""
+        demo = [c for c in self.game_classes if c.attract]
+        if not demo:
+            return
+        ids = [c.id for c in demo]
+        cur = self.game.id if self.game else None
+        nxt = demo[(ids.index(cur) + 1) % len(demo)] if cur in ids else demo[0]
+        log.info("Attract mode -> %s", nxt.id)
+        self.select_game(nxt.id)
+        if self.game is not None:
+            self.game.reset()
 
     def _render_projector(self, target=None) -> None:
         """Vykreslí výstup projektoru do okna (nebo do offscreen framebufferu `target`)."""
@@ -201,7 +252,7 @@ class SandboxApp:
         if self.calibration.active:
             self.calibration.render_canvas()
         elif host.heightmap is not None and self.game is not None:
-            self.game.render()
+            self._guarded(self.game.render)
         else:
             cw, ch = host.canvas_size
             host.painter.text("Čekám na data z Kinectu…" if self.terrain.calibration else
@@ -209,6 +260,8 @@ class SandboxApp:
                               anchor="mc", color=(1, 1, 1, 1))
         host.painter.begin(host.canvas_size, screen=False)
         self._canvas_overlays()
+        if not self.calibration.active:
+            self.attract.draw_intro(host)
 
         if target is None:
             fb = self.proj_win.begin()

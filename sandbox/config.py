@@ -49,6 +49,7 @@ class DisplaySettings:
     operator_window: bool = True
     canvas_width: int = 1280  # rozlišení vykreslování mapy pískoviště
     mesh_resolution: int = 96  # hustota sítě pro korekci paralaxy
+    max_fps: float = 60.0  # strop snímků na Waylandu (tam swap s vsync neblokuje)
 
 
 @dataclass
@@ -79,6 +80,23 @@ class WaterSettings:
 
 
 @dataclass
+class AttractSettings:
+    enabled: bool = True
+    idle_seconds: float = 90.0  # [s] bez rukou a změn terénu -> módy se samy střídají
+    cycle_seconds: float = 45.0  # [s] délka jedné ukázky v attract mode
+    intro_seconds: float = 5.0  # [s] úvodní slajd po výběru módu
+    change_threshold: float = 0.01  # [m] změna výšky buňky, která se počítá jako „někdo hrabe“
+    change_fraction: float = 0.004  # podíl změněných buněk, od kterého je to aktivita
+
+
+@dataclass
+class LogSettings:
+    file: str = "logs/piskoviste.log"  # relativně k ROOT; prázdné = jen konzole
+    max_bytes: int = 5_000_000
+    backups: int = 5
+
+
+@dataclass
 class Settings:
     sensor: SensorSettings = field(default_factory=SensorSettings)
     terrain: TerrainSettings = field(default_factory=TerrainSettings)
@@ -86,6 +104,8 @@ class Settings:
     map: MapSettings = field(default_factory=MapSettings)
     challenge: ChallengeSettings = field(default_factory=ChallengeSettings)
     water: WaterSettings = field(default_factory=WaterSettings)
+    attract: AttractSettings = field(default_factory=AttractSettings)
+    log: LogSettings = field(default_factory=LogSettings)
     start_game: str = "topo"
 
     def to_dict(self) -> dict[str, Any]:

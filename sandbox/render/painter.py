@@ -149,8 +149,10 @@ class Painter:
 
     def text(self, s: str, x: float, y: float, size: int = 24, color: Color = (1, 1, 1, 1),
              anchor: str = "tl", bold: bool = False, outline: int = 0, outline_color: Color = (0, 0, 0, 1),
-             background: Color | None = None, padding: float = 6) -> tuple[float, float]:
-        """Vykreslí text. anchor = 2 znaky: t/m/b (svisle) + l/c/r (vodorovně). Vrací (šířka, výška)."""
+             background: Color | None = None, padding: float = 6, alpha: float = 1.0) -> tuple[float, float]:
+        """Vykreslí text. anchor = 2 znaky: t/m/b (svisle) + l/c/r (vodorovně). Vrací (šířka, výška).
+
+        `alpha` prolíná celý text (pro animace) – na rozdíl od alfy v `color` nevytváří novou texturu."""
         if not s:
             return 0.0, 0.0
         c255 = tuple(int(round(v * 255)) for v in color)
@@ -167,5 +169,5 @@ class Painter:
             x -= w
         if background is not None:
             self.rect(x - padding, y - padding, w + 2 * padding, h + 2 * padding, background)
-        self.image(tex, x, y, w, h)
+        self.image(tex, x, y, w, h, tint=(1, 1, 1, alpha))
         return float(w), float(h)

@@ -39,7 +39,8 @@ def record(settings: Settings, seconds: float, out: Path) -> Path:
     return out
 
 
-def render_snapshots(settings: Settings, out_dir: Path, frames: int = 20, size: tuple[int, int] = (1280, 800)) -> list[Path]:
+def render_snapshots(settings: Settings, out_dir: Path, frames: int = 20, size: tuple[int, int] = (1280, 800),
+                     only: str | None = None, steps: int = 60) -> list[Path]:
     """Vykreslí každou hru nad simulovaným pískem do PNG – bez okna a bez projektoru.
 
     Hodí se na rychlou kontrolu nové hry nebo úpravy shaderu.
@@ -78,6 +79,8 @@ def render_snapshots(settings: Settings, out_dir: Path, frames: int = 20, size: 
         written.append(path)
 
     for cls in discover_games():
+        if only and cls.id != only:
+            continue
         hm = None
         for i in range(frames):
             hm = proc.process(sim.render_depth(), seq=i)
@@ -86,10 +89,11 @@ def render_snapshots(settings: Settings, out_dir: Path, frames: int = 20, size: 
         hands = np.zeros(hm.shape, bool)
         hands[hm.shape[0] // 3: hm.shape[0] // 2, hm.shape[1] // 4: hm.shape[1] // 3] = True
         hm.hands = hands
+        hm.hand_points = proc.hand_points(hands)
         host.update_heightmap(hm)
         game = cls(host)
         game.start()
-        for _ in range(60):
+        for _ in range(steps):
             game.update(hm, 1 / 30)
         host.begin_canvas()
         host.canvas.clear(0, 0, 0, 1)  # type: ignore[union-attr]

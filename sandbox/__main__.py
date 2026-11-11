@@ -7,6 +7,8 @@ Příkazy:
   monitors   vypsat monitory (kvůli výběru projektoru)
   record     nahrát data z Kinectu do souboru
   snapshot   vykreslit všechny hry nad simulací do PNG (bez okna)
+  autocalibrate  automatická kalibrace Kinectu i projektoru (barevná kamera Kinectu)
+  checkcal   kontrola kalibrace: přesnost v cm + fotky mřížky a vrstevnic (--out složka)
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python -m sandbox", description="Interaktivní AR pískoviště",
                                 formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
     p.add_argument("command", nargs="?", default="run",
-                   choices=["run", "calibrate", "games", "monitors", "record", "snapshot"])
+                   choices=["run", "calibrate", "games", "monitors", "record", "snapshot", "autocalibrate", "checkcal"])
     p.add_argument("--sensor", choices=["auto", "kinect2", "sim", "replay"], help="zdroj hloubky")
     p.add_argument("--replay", metavar="SOUBOR", help="nahrávka pro --sensor replay")
     p.add_argument("--pipeline", choices=["gl", "cpu"], help="dekódování Kinectu v2")
@@ -45,6 +47,15 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s", datefmt="%H:%M:%S")
     settings = load_settings(args.settings)
+    if settings.log.file and args.command in ("run", "calibrate"):
+        from logging.handlers import RotatingFileHandler
+
+        log_path = ROOT / settings.log.file
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        fh = RotatingFileHandler(log_path, maxBytes=settings.log.max_bytes, backupCount=settings.log.backups,
+                                 encoding="utf-8")
+        fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s"))
+        logging.getLogger().addHandler(fh)
     if args.sensor:
         settings.sensor.kind = args.sensor
     if args.replay:
@@ -86,8 +97,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "snapshot":
         from .tools import render_snapshots
 
-        for path in render_snapshots(settings, args.out or ROOT / "snapshots"):
+        for path in render_snapshots(settings, args.out or ROOT / "snapshots", only=args.game,
+                                     steps=int(args.duration * 30) if args.duration else 60):
             print(path)
+        return 0
+
+    if args.command in ("autocalibrate", "checkcal"):
+        import json
+
+        from . import autocal
+
+        if args.command == "autocalibrate":
+            result = autocal.autocalibrate(settings)
+        else:
+            result = autocal.check_calibration(settings, args.out or ROOT / "snapshots" / "kontrola")
+        print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 
     from .app import SandboxApp
