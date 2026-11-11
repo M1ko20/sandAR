@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import os
 import sys
 from typing import Callable
 
@@ -27,9 +28,46 @@ def _addr(monitor) -> int:
 def init_glfw() -> None:
     global _initialized
     if not _initialized:
+        # Výchozí je nativní Wayland (správné HiDPI: projektor 1:1, notebook 2×).
+        # SANDBOX_GLFW_PLATFORM=x11 vynutí XWayland (pozor: KDE tam všechny výstupy škáluje).
+        if sys.platform.startswith("linux") and os.environ.get("SANDBOX_GLFW_PLATFORM") == "x11":
+            glfw.init_hint(glfw.PLATFORM, glfw.PLATFORM_X11)
         if not glfw.init():
             raise RuntimeError("GLFW se nepodařilo inicializovat")
         _initialized = True
+
+
+def _is_wayland() -> bool:
+    return hasattr(glfw, "get_platform") and glfw.get_platform() == glfw.PLATFORM_WAYLAND
+
+
+class _GlfwLoader:
+    """Načítá OpenGL funkce přes GLFW – funguje s jakýmkoli kontextem, který GLFW vytvoří
+    (EGL na Waylandu, GLX na X11, CGL na macOS). Výchozí cesta moderngl u druhého,
+    sdíleného okna na Linuxu natvrdo hledá GLX, a na Waylandu proto padala."""
+
+    def load_opengl_function(self, name: str) -> int:
+        ptr = glfw.get_proc_address(name)
+        return ctypes.cast(ptr, ctypes.c_void_p).value or 0 if ptr else 0
+
+    def release(self) -> None:
+        pass
+
+
+def _create_context() -> moderngl.Context:
+    if sys.platform == "darwin":
+        return moderngl.create_context()
+    previous = moderngl._store.default_context
+    moderngl._store.default_context = None
+    try:
+        moderngl.init_context(_GlfwLoader())
+        ctx = moderngl._store.default_context
+    finally:
+        if previous is not None:
+            moderngl._store.default_context = previous
+    if ctx.version_code < 330:
+        raise RuntimeError(f"Potřeba OpenGL 3.3, k dispozici {ctx.version_code}")
+    return ctx
 
 
 def terminate_glfw() -> None:
@@ -71,6 +109,23 @@ def find_projector_monitor(spec: str):
     primary = glfw.get_primary_monitor()
     others = [m for m in monitors if _addr(m) != _addr(primary)]
     return others[0] if others else None
+
+
+def operator_window_size(default: tuple[int, int] = (1280, 780)) -> tuple[int, int]:
+    """Velikost operátorského okna podle hlavního monitoru (~90 % plochy), v jednotkách okna.
+
+    Na Waylandu jsou to logické body (notebook 2880×1800 při škálování 2× = 1440×900),
+    na X11 fyzické pixely, na macOS body – video mode je tam už v bodech."""
+    init_glfw()
+    mon = glfw.get_primary_monitor()
+    if not mon:
+        return default
+    mode = glfw.get_video_mode(mon)
+    w, h = mode.size.width, mode.size.height
+    if _is_wayland():
+        sx, sy = glfw.get_monitor_content_scale(mon)
+        w, h = w / max(sx, 1e-3), h / max(sy, 1e-3)
+    return max(800, int(w * 0.9)), max(560, int(h * 0.85))
 
 
 _KEY_NAMES = {
@@ -122,12 +177,15 @@ class Window:
                                          share.handle if share else None)
         if not self.handle:
             raise RuntimeError("Nepodařilo se vytvořit okno (OpenGL 3.3)")
-        if position and monitor is None:
+        if position and monitor is None and not _is_wayland():  # Wayland pozici okna nepovolí
             glfw.set_window_pos(self.handle, *position)
         self.fullscreen = monitor is not None
         glfw.make_context_current(self.handle)
-        glfw.swap_interval(1 if vsync else 0)
-        self.ctx = moderngl.create_context()
+        # Na Waylandu swap s vsync blokuje, dokud kompozitor okno nezobrazí – zakryté okno
+        # (projekce pod oknem obsluhy) by zastavilo celou smyčku. Tempo tam hlídá app (frame_limit).
+        glfw.swap_interval(1 if vsync and not _is_wayland() else 0)
+        self.vsync = vsync
+        self.ctx = _create_context()
         self.share = share
 
         self.key_handlers: list[Callable[[str, int], None]] = []
@@ -167,7 +225,7 @@ class Window:
 
     def begin(self) -> moderngl.Framebuffer:
         self.make_current()
-        fb = self.ctx.detect_framebuffer()
+        fb = self.ctx.detect_framebuffer(0)  # výchozí framebuffer okna – ne ten, co je zrovna navázaný (plátno)
         fb.use()
         fb.viewport = (0, 0, *self.framebuffer_size)
         return fb
@@ -202,6 +260,11 @@ class Window:
         x, y = self.cursor()
         for h in self.mouse_handlers:
             h("move", x, y, -1)
+
+
+def needs_frame_limit() -> bool:
+    """True, když swap neblokuje (Wayland) a smyčku je třeba brzdit ručně."""
+    return _is_wayland()
 
 
 def poll_events() -> None:

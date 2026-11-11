@@ -140,7 +140,17 @@ class OperatorView:
 
         m = 14 * s
         header = 46 * s
-        footer = 250 * s
+        # Zápatí podle obsahu (kalibrační návod má 9 řádků a do pevných 250 px se nevešel).
+        if app.calibration.active:
+            lines = app.calibration.instructions()
+        else:
+            lines = [app.game.description] if app.game else []
+            lines += app.game.status() if app.game else []
+            if app.terrain.calibration is None:
+                lines.append("Pískoviště není zkalibrované – stiskni C.")
+        lines = lines[:10]
+        n_msgs = len(app.host.active_messages()[-2:])
+        footer = max(250.0, 2 * 14 + 26 + 23 * max(len(lines) - 1, 0) + 25 * n_msgs + 26) * s
         panel_h = max(60.0, fh - header - footer - 2 * m)
         panel_w = (fw - 3 * m) / 2
         intr = app.sensor.intrinsics
@@ -161,9 +171,14 @@ class OperatorView:
             info += f" · terén {proc.last_ms:4.1f} ms, pokrytí {proc.last_coverage * 100:3.0f} %"
         if app.terrain.frozen:
             info += " · ZMRAZENO"
+        at = app.attract
+        if at.active:
+            info += " · ATTRACT MODE"
+        elif app.settings.attract.enabled:
+            info += f" · klid {at.idle_for:3.0f}/{app.settings.attract.idle_seconds:.0f} s"
         if app.sensor.error:  # např. zaseknutý Kinect – ať to obsluha vidí hned
             p.rect(0, header, fw, 30 * s, (0.55, 0.12, 0.10, 1))
-            p.text(f"⚠ {app.sensor.error}", m, header + 15 * s, size=int(15 * s), anchor="ml", bold=True,
+            p.text(f"POZOR: {app.sensor.error}", m, header + 15 * s, size=int(15 * s), anchor="ml", bold=True,
                    color=TEXT)
         p.text(info, fw - m, header / 2, size=int(14 * s), anchor="mr", color=DIM)
 
@@ -185,6 +200,12 @@ class OperatorView:
         p.rect_outline(cx, cy, cw, ch, (0.4, 0.42, 0.46, 1), 1.5 * s)
         p.text(f"Promítání (pohled shora, {W * 100:.0f} × {D * 100:.0f} cm)", cx, cy - 4 * s,
                size=int(13 * s), anchor="bl", color=DIM)
+        hm = app.host.heightmap
+        if hm is not None:  # ladění: kde systém vidí ruce
+            for hx, hy in hm.hand_points:
+                px, py = cx + hx / W * cw, cy + hy / D * ch
+                p.circle(px, py, 12 * s, (1.0, 0.3, 0.9, 1), width=2.5 * s)
+                p.text("ruka", px + 14 * s, py, size=int(12 * s), anchor="ml", color=(1.0, 0.5, 0.95, 1), outline=2)
         for i, (bx, by) in enumerate([(cx, cy), (cx + cw, cy), (cx + cw, cy + ch), (cx, cy + ch)]):
             p.text(str(i + 1), bx, by, size=int(13 * s), anchor="mc", bold=True, color=CORNER_COLORS[i],
                    outline=2, background=None)
@@ -192,16 +213,8 @@ class OperatorView:
         # zápatí
         top = fh - footer
         p.rect(0, top, fw, footer, PANEL)
-        lines: list[str]
-        if app.calibration.active:
-            lines = app.calibration.instructions()
-        else:
-            lines = [app.game.description] if app.game else []
-            lines += app.game.status() if app.game else []
-            if app.terrain.calibration is None:
-                lines.append("Pískoviště není zkalibrované – stiskni C.")
         y = top + m
-        for i, line in enumerate(lines[:10]):
+        for i, line in enumerate(lines):
             _, h = p.text(line, m, y, size=int((16 if i == 0 else 14) * s), color=TEXT if i == 0 else DIM,
                           bold=(i == 0))
             y += h + 6 * s
