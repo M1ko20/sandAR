@@ -10,3 +10,6 @@ config/calibration_*.json
 config/settings.json
 *.egg-info/
 .DS_Store
+logs/
+shares/
+config/records.json

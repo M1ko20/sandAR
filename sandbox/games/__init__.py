@@ -30,4 +30,25 @@ def discover_games() -> list[type[Game]]:
     return sorted(found.values(), key=lambda c: (c.order, c.id))
 
 
-__all__ = ["Game", "discover_games"]
+def mode_key(index: int) -> str:
+    """Klávesa pro mód s pořadím `index` (0 = první): 1–9, 0, pak Shift+1–9."""
+    if index < 9:
+        return str(index + 1)
+    if index == 9:
+        return "0"
+    if index < 19:
+        return f"Shift+{index - 9}"
+    return "Tab"
+
+
+def mode_index(name: str, shift: bool) -> int | None:
+    """Opak mode_key: číslice (+Shift) -> pořadí módu, jinak None."""
+    if not (len(name) == 1 and name.isdigit()):
+        return None
+    d = int(name)
+    if shift:
+        return None if d == 0 else 9 + d
+    return 9 if d == 0 else d - 1
+
+
+__all__ = ["Game", "discover_games", "mode_index", "mode_key"]

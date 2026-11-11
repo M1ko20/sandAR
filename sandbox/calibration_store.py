@@ -13,6 +13,7 @@ from .config import CONFIG_DIR, write_json
 from .projector.calibration import ProjectorCalibration
 from .sensor.base import Intrinsics
 from .terrain.calibration import CalibrationError, KinectCalibration
+from .terrain.playarea import PlayArea
 
 log = logging.getLogger(__name__)
 
@@ -55,10 +56,23 @@ def load_calibration(path: Path, intrinsics: Intrinsics | None = None
     return kinect, projector
 
 
-def save_calibration(path: Path, kinect: KinectCalibration | None, projector: ProjectorCalibration) -> None:
+def save_calibration(path: Path, kinect: KinectCalibration | None, projector: ProjectorCalibration,
+                     play_area: PlayArea | None = None) -> None:
+    """Ukládá se vždy CELÁ bedna; hrací plocha (okraje od stěn) zvlášť – ořízne se až při načtení."""
+    if play_area is None:
+        play_area = load_play_area(path)
     write_json(path, {
         "saved": time.strftime("%Y-%m-%d %H:%M:%S"),
         "kinect": kinect.to_dict() if kinect else None,
         "projector": projector.to_dict(),
+        "play_area": play_area.to_dict() if play_area else None,
     })
     log.info("Kalibrace uložena do %s", path)
+
+
+def load_play_area(path: Path) -> PlayArea | None:
+    try:
+        d = json.loads(path.read_text(encoding="utf-8")).get("play_area")
+    except (OSError, json.JSONDecodeError):
+        return None
+    return PlayArea.from_dict(d) if d else None

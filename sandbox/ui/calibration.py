@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from ..render.window import MOUSE_LEFT, MOUSE_RIGHT
-from ..terrain.calibration import CalibrationError, KinectCalibration, detect_box_corners
+from ..terrain.calibration import CalibrationError, KinectCalibration, detect_box_corners, unmirror_corners
 
 if TYPE_CHECKING:
     from ..app import SandboxApp
@@ -93,6 +93,7 @@ class CalibrationMode:
         self.active = False
         self.capturing = False
         app.proj_win.set_cursor_visible(False)
+        app.calibration_left()
 
     # --- logika -----------------------------------------------------------------------
     def update(self) -> None:
@@ -107,6 +108,11 @@ class CalibrationMode:
             if corners is None:
                 self.app.host.notify("Rohy bedny se nepodařilo najít – klikni je ručně", 6)
             else:
+                try:  # obraz Kinectu je zrcadlený – rohy seřadit tak, aby plátno nebylo zrcadlově
+                    probe = KinectCalibration.from_depth(self.app.sensor.intrinsics, depth, corners)
+                    corners = unmirror_corners(self.app.sensor.intrinsics, corners, probe.normal)
+                except CalibrationError:
+                    pass
                 self.depth_corners = [c for c in corners]
                 self.corners_dirty = True
                 self.app.host.notify("Rohy bedny nalezeny – zkontroluj je a stiskni Enter", 6)

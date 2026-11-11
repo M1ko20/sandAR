@@ -134,3 +134,37 @@ def test_detect_box_corners_on_real_kinect_frame():
     cal = KinectCalibration.from_depth(intr, depth, corners)
     assert 1.5 < cal.size[0] < 1.9 and 0.95 < cal.size[1] < 1.2  # bedna cca 173 x 109 cm
     assert cal.offset == pytest.approx(1.39, abs=0.03)
+
+
+def test_detect_box_corners_walls_on_real_kinect_frame():
+    """Rohy podle vnitřních hran stěn – nezávisí na tom, jak rovně je uhlazený písek."""
+    from pathlib import Path
+
+    from sandbox.sensor.base import Intrinsics
+    from sandbox.terrain.calibration import detect_box_corners_walls
+
+    data = np.load(Path(__file__).parent / "data" / "kinect2_flat.npz")
+    w, h, fx, fy, cx, cy = data["intr"]
+    intr = Intrinsics(int(w), int(h), fx, fy, cx, cy)
+    depth = data["depth_mm"].astype(np.float32) / 1000
+    corners = detect_box_corners_walls(intr, depth)
+    assert corners is not None
+    np.testing.assert_allclose(corners, [[34, 111], [490, 105], [514, 393], [20, 402]], atol=3)
+
+    # kopec 8 cm uprostřed (neuhlazený písek) detekci nerozhodí
+    yy, xx = np.mgrid[:h, :w]
+    bump = 0.08 * np.exp(-((xx - w / 2) ** 2 + (yy - h / 2) ** 2) / (2 * 50.0 ** 2))
+    corners2 = detect_box_corners_walls(intr, np.where(depth > 0, depth - bump, 0).astype(np.float32))
+    assert corners2 is not None
+    np.testing.assert_allclose(corners2, corners, atol=3)
+
+
+def test_unmirror_corners_makes_box_axes_right_handed(sim):
+    from sandbox.terrain.calibration import unmirror_corners
+
+    normal, offset, corners = sim.ground_truth()
+    for c in (corners, corners[[1, 0, 3, 2]]):  # správné i zrcadlové pořadí
+        fixed = unmirror_corners(sim.intrinsics, c, normal)
+        cal = KinectCalibration.from_plane(sim.intrinsics, normal, offset, fixed)
+        n = cal.normal if cal.normal[2] < 0 else -cal.normal
+        assert np.cross(cal.ex, cal.ey) @ n > 0

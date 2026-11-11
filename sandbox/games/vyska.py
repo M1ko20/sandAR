@@ -29,6 +29,9 @@ class HeightGame(Game):
     title = "Výšková mapa"
     description = "Výška písku jako barva nebo odstín šedi (jak ji vidí počítač)."
     order = 30
+    category = "vizualizace"
+    attract = False  # pro ukázky nudné, je hlavně pro ladění
+    intro = "Takhle vidí pískoviště počítač – každá barva je jiná výška."
     keys = [("G", "šedá / barevná"), ("A", "automatický rozsah")]
 
     def start(self) -> None:

@@ -41,13 +41,22 @@ def fill_holes(values: np.ndarray, valid: np.ndarray, default: float = 0.0) -> n
 
 
 def _replicate_edges(a: np.ndarray, ex: int, ey: int) -> None:
-    """Okrajový pás nahradí nejbližšími vnitřními hodnotami (na místě)."""
+    """Okrajový pás nahradí nejbližšími vnitřními hodnotami (na místě) a podél stěny ho
+    rozmaže – jinak by kopírování jednoho sloupce kreslilo pruhy kolmo ke stěně."""
     if ey:
         a[:ey, :] = a[ey, :]
         a[-ey:, :] = a[-ey - 1, :]
     if ex:
         a[:, :ex] = a[:, ex:ex + 1]
         a[:, -ex:] = a[:, -ex - 1:-ex]
+    if ex or ey:
+        blur = cv2.GaussianBlur(a, (0, 0), 3.0)
+        if ey:
+            a[:ey, :] = blur[:ey, :]
+            a[-ey:, :] = blur[-ey:, :]
+        if ex:
+            a[:, :ex] = blur[:, :ex]
+            a[:, -ex:] = blur[:, -ex:]
 
 
 class TerrainProcessor:
@@ -168,4 +177,15 @@ class TerrainProcessor:
 
         out = cv2.GaussianBlur(state, (0, 0), s.spatial_sigma) if s.spatial_sigma > 0 else state.copy()
         self.last_ms = (time.perf_counter() - t0) * 1000
-        return HeightMap(out, self.size, hands, seq=seq, timestamp=time.monotonic())
+        return HeightMap(out, self.size, hands, hand_points=self.hand_points(hands), seq=seq,
+                         timestamp=time.monotonic())
+
+    def hand_points(self, hands: np.ndarray, min_cells: int = 12) -> list[tuple[float, float]]:
+        """Středy souvislých oblastí rukou (v metrech), od největší."""
+        if not hands.any():
+            return []
+        n, _, stats, cent = cv2.connectedComponentsWithStats(hands.astype(np.uint8), connectivity=8)
+        cw, ch = self.size[0] / self.gw, self.size[1] / self.gh
+        blobs = [(int(stats[i, cv2.CC_STAT_AREA]), (float(cent[i, 0] + 0.5) * cw, float(cent[i, 1] + 0.5) * ch))
+                 for i in range(1, n) if stats[i, cv2.CC_STAT_AREA] >= min_cells]
+        return [p for _, p in sorted(blobs, reverse=True)]

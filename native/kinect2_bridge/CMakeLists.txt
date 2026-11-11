@@ -19,3 +19,11 @@ get_filename_component(_fn2_libdir "${freenect2_LIBRARY}" DIRECTORY)
 set_target_properties(kinect2_bridge PROPERTIES
   BUILD_RPATH "${_fn2_libdir}"
   INSTALL_RPATH "${_fn2_libdir}")
+
+# kinect2_snap: barevné snímky srovnané s hloubkou (automatická kalibrace projektoru)
+add_executable(kinect2_snap snap.cpp)
+target_include_directories(kinect2_snap PRIVATE ${freenect2_INCLUDE_DIRS})
+target_link_libraries(kinect2_snap PRIVATE ${freenect2_LIBRARIES})
+set_target_properties(kinect2_snap PROPERTIES
+  BUILD_RPATH "${_fn2_libdir}"
+  INSTALL_RPATH "${_fn2_libdir}")

@@ -64,6 +64,8 @@ class MapGame(Game):
     title = "Turistická mapa"
     description = "Vrstevnice jako na papírové mapě, kóty vrcholů a vodní plochy."
     order = 20
+    category = "vizualizace"
+    intro = "Postav hory a údolí a sleduj, jak z nich vzniká turistická mapa."
     keys = [("V", "kóty vrcholů zap/vyp"), ("S", "stínování zap/vyp"), ("↑ / ↓", "hladina vody")]
 
     def start(self) -> None:

@@ -8,6 +8,7 @@ import cv2
 import moderngl
 import numpy as np
 
+from ..games import mode_key
 from ..render.painter import Painter
 from ..render.window import MOUSE_LEFT, MOUSE_RIGHT, Window
 
@@ -22,7 +23,8 @@ ACCENT = (0.40, 0.75, 1.0, 1)
 CORNER_COLORS = [(1.0, 0.3, 0.3, 1), (0.3, 1.0, 0.3, 1), (0.35, 0.6, 1.0, 1), (1.0, 0.9, 0.2, 1)]
 
 GLOBAL_KEYS = [
-    ("1–9 / Tab", "výběr hry"),
+    ("1–9, 0, Shift+1–9", "výběr módu (nebo klik dole)"),
+    ("Tab", "další mód"),
     ("C", "kalibrace"),
     ("H", "nápověda na písku"),
     ("Z", "zmrazit terén"),
@@ -140,7 +142,17 @@ class OperatorView:
 
         m = 14 * s
         header = 46 * s
-        footer = 250 * s
+        # Zápatí podle obsahu (kalibrační návod má 9 řádků a do pevných 250 px se nevešel).
+        if app.calibration.active:
+            lines = app.calibration.instructions()
+        else:
+            lines = [app.game.description] if app.game else []
+            lines += app.game.status() if app.game else []
+            if app.terrain.calibration is None:
+                lines.append("Pískoviště není zkalibrované – stiskni C.")
+        lines = lines[:10]
+        n_msgs = len(app.host.active_messages()[-2:])
+        footer = max(290.0, 2 * 14 + 26 + 23 * max(len(lines) - 1, 0) + 25 * n_msgs + 2 * 36 + 10) * s
         panel_h = max(60.0, fh - header - footer - 2 * m)
         panel_w = (fw - 3 * m) / 2
         intr = app.sensor.intrinsics
@@ -161,9 +173,14 @@ class OperatorView:
             info += f" · terén {proc.last_ms:4.1f} ms, pokrytí {proc.last_coverage * 100:3.0f} %"
         if app.terrain.frozen:
             info += " · ZMRAZENO"
+        at = app.attract
+        if at.active:
+            info += " · ATTRACT MODE"
+        elif app.settings.attract.enabled:
+            info += f" · klid {at.idle_for:3.0f}/{app.settings.attract.idle_seconds:.0f} s"
         if app.sensor.error:  # např. zaseknutý Kinect – ať to obsluha vidí hned
             p.rect(0, header, fw, 30 * s, (0.55, 0.12, 0.10, 1))
-            p.text(f"⚠ {app.sensor.error}", m, header + 15 * s, size=int(15 * s), anchor="ml", bold=True,
+            p.text(f"POZOR: {app.sensor.error}", m, header + 15 * s, size=int(15 * s), anchor="ml", bold=True,
                    color=TEXT)
         p.text(info, fw - m, header / 2, size=int(14 * s), anchor="mr", color=DIM)
 
@@ -185,6 +202,12 @@ class OperatorView:
         p.rect_outline(cx, cy, cw, ch, (0.4, 0.42, 0.46, 1), 1.5 * s)
         p.text(f"Promítání (pohled shora, {W * 100:.0f} × {D * 100:.0f} cm)", cx, cy - 4 * s,
                size=int(13 * s), anchor="bl", color=DIM)
+        hm = app.host.heightmap
+        if hm is not None:  # ladění: kde systém vidí ruce
+            for hx, hy in hm.hand_points:
+                px, py = cx + hx / W * cw, cy + hy / D * ch
+                p.circle(px, py, 12 * s, (1.0, 0.3, 0.9, 1), width=2.5 * s)
+                p.text("ruka", px + 14 * s, py, size=int(12 * s), anchor="ml", color=(1.0, 0.5, 0.95, 1), outline=2)
         for i, (bx, by) in enumerate([(cx, cy), (cx + cw, cy), (cx + cw, cy + ch), (cx, cy + ch)]):
             p.text(str(i + 1), bx, by, size=int(13 * s), anchor="mc", bold=True, color=CORNER_COLORS[i],
                    outline=2, background=None)
@@ -192,16 +215,8 @@ class OperatorView:
         # zápatí
         top = fh - footer
         p.rect(0, top, fw, footer, PANEL)
-        lines: list[str]
-        if app.calibration.active:
-            lines = app.calibration.instructions()
-        else:
-            lines = [app.game.description] if app.game else []
-            lines += app.game.status() if app.game else []
-            if app.terrain.calibration is None:
-                lines.append("Pískoviště není zkalibrované – stiskni C.")
         y = top + m
-        for i, line in enumerate(lines[:10]):
+        for i, line in enumerate(lines):
             _, h = p.text(line, m, y, size=int((16 if i == 0 else 14) * s), color=TEXT if i == 0 else DIM,
                           bold=(i == 0))
             y += h + 6 * s
@@ -215,14 +230,31 @@ class OperatorView:
             help_items += SIM_KEYS
         x0 = fw * 0.58
         y = top + m
-        for k, desc in help_items[:13]:
+        buttons_top = fh - m - 2 * 30 * s - 6 * s
+        for k, desc in help_items:
+            if y + 18 * s > buttons_top - 6 * s:  # nepřekrývat tlačítka módů
+                break
             p.text(k, x0, y, size=int(13 * s), color=ACCENT, bold=True)
-            _, h = p.text(desc, x0 + 120 * s, y, size=int(13 * s), color=DIM)
+            _, h = p.text(desc, x0 + 170 * s, y, size=int(13 * s), color=DIM)
             y += h + 4 * s
 
-        # seznam her
-        games = " · ".join(f"{i + 1} {g.title}" for i, g in enumerate(app.game_classes[:9]))
-        p.text(games, m, fh - m, size=int(12 * s), anchor="bl", color=DIM)
+        # seznam všech módů – tlačítka na klik (aktuální zvýrazněný)
+        self.mode_buttons = []
+        n = len(app.game_classes)
+        per_row = max(1, (n + 1) // 2)
+        bw = (fw - 2 * m - (per_row - 1) * 6 * s) / per_row
+        bh = 30 * s
+        y0 = fh - m - 2 * bh - 6 * s
+        for i, g in enumerate(app.game_classes):
+            r, c = divmod(i, per_row)
+            bx, by = m + c * (bw + 6 * s), y0 + r * (bh + 6 * s)
+            cur = app.game is not None and type(app.game) is g
+            p.rect(bx, by, bw, bh, (0.25, 0.45, 0.75, 1) if cur else (0.22, 0.23, 0.27, 1))
+            p.text(mode_key(i), bx + 8 * s, by + bh / 2, size=int(12 * s), anchor="ml", bold=True,
+                   color=TEXT if cur else ACCENT)
+            p.text(g.title, bx + 8 * s + (58 if i >= 10 else 22) * s, by + bh / 2, size=int(13 * s), anchor="ml",
+                   color=TEXT if cur else DIM)
+            self.mode_buttons.append((bx, by, bw, bh, i))
         if target is None:
             self.win.swap()
 
@@ -245,6 +277,13 @@ class OperatorView:
 
     # --- myš ---------------------------------------------------------------------------------
     def mouse(self, kind: str, x: float, y: float, button: int) -> None:
+        if kind == "press" and button == MOUSE_LEFT and not self.app.calibration.active:
+            for bx, by, bw, bh, i in getattr(self, "mode_buttons", []):
+                if bx <= x <= bx + bw and by <= y <= by + bh:
+                    self.app.attract.poke()
+                    self.app.proj_win.make_current()
+                    self.app.select_game(i)
+                    return
         if self.app.calibration.active:
             uv = self.depth_panel_to_pixel(x, y)
             self.app.calibration.depth_mouse(kind, *(uv if uv else (None, None)), button)

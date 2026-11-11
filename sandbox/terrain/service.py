@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import warnings
 import time
 
 import numpy as np
@@ -79,7 +80,8 @@ class TerrainService:
             self._capture = None
         stack = np.stack(c["frames"]).astype(np.float32)
         stack[stack <= 0] = np.nan
-        with np.errstate(all="ignore"):
+        with np.errstate(all="ignore"), warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # pixely bez dat -> 0
             med = np.nanmedian(stack, axis=0)
         return np.nan_to_num(med, nan=0.0).astype(np.float32)
 

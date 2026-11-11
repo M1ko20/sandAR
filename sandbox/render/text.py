@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
@@ -17,6 +18,7 @@ _FONT_CANDIDATES = {
         "/usr/share/fonts/TTF/DejaVuSans.ttf",
         "/usr/share/fonts/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/liberation-sans-fonts/LiberationSans-Regular.ttf",  # Fedora
     ],
     "bold": [
         "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
@@ -25,6 +27,7 @@ _FONT_CANDIDATES = {
         "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/liberation-sans-fonts/LiberationSans-Bold.ttf",  # Fedora
     ],
 }
 
@@ -34,7 +37,20 @@ def get_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFon
     for path in _FONT_CANDIDATES["bold" if bold else "regular"] + _FONT_CANDIDATES["regular"]:
         if Path(path).is_file():
             return ImageFont.truetype(path, size)
+    path = _fontconfig_match("sans:bold:charset=2190" if bold else "sans:charset=2190")  # Fedora apod.; font se šipkami
+    if path:
+        return ImageFont.truetype(path, size)
     return ImageFont.load_default(size)
+
+
+@lru_cache(maxsize=4)
+def _fontconfig_match(pattern: str) -> str | None:
+    try:
+        out = subprocess.run(["fc-match", "-f", "%{file}", pattern], capture_output=True,
+                             text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out if out.lower().endswith((".ttf", ".otf", ".ttc")) and Path(out).is_file() else None
 
 
 def render_text(text: str, size: int, color=(255, 255, 255, 255), bold: bool = False,

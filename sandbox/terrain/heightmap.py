@@ -19,6 +19,7 @@ class HeightMap:
     heights: np.ndarray  # float32 (GH, GW)
     size: tuple[float, float]  # rozměr bedny (šířka x, hloubka y) v metrech
     hands: np.ndarray | None = None  # bool (GH, GW) – nad buňkou je ruka/předmět
+    hand_points: list[tuple[float, float]] = field(default_factory=list)  # středy rukou [m, souř. bedny]
     seq: int = 0
     timestamp: float = 0.0
     extra: dict = field(default_factory=dict)
