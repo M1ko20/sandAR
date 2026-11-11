@@ -8,6 +8,7 @@ import cv2
 import moderngl
 import numpy as np
 
+from ..games import mode_key
 from ..render.painter import Painter
 from ..render.window import MOUSE_LEFT, MOUSE_RIGHT, Window
 
@@ -22,7 +23,8 @@ ACCENT = (0.40, 0.75, 1.0, 1)
 CORNER_COLORS = [(1.0, 0.3, 0.3, 1), (0.3, 1.0, 0.3, 1), (0.35, 0.6, 1.0, 1), (1.0, 0.9, 0.2, 1)]
 
 GLOBAL_KEYS = [
-    ("1–9 / Tab", "výběr hry"),
+    ("1–9, 0, Shift+1–9", "výběr módu (nebo klik dole)"),
+    ("Tab", "další mód"),
     ("C", "kalibrace"),
     ("H", "nápověda na písku"),
     ("Z", "zmrazit terén"),
@@ -150,7 +152,7 @@ class OperatorView:
                 lines.append("Pískoviště není zkalibrované – stiskni C.")
         lines = lines[:10]
         n_msgs = len(app.host.active_messages()[-2:])
-        footer = max(250.0, 2 * 14 + 26 + 23 * max(len(lines) - 1, 0) + 25 * n_msgs + 26) * s
+        footer = max(290.0, 2 * 14 + 26 + 23 * max(len(lines) - 1, 0) + 25 * n_msgs + 2 * 36 + 10) * s
         panel_h = max(60.0, fh - header - footer - 2 * m)
         panel_w = (fw - 3 * m) / 2
         intr = app.sensor.intrinsics
@@ -228,14 +230,31 @@ class OperatorView:
             help_items += SIM_KEYS
         x0 = fw * 0.58
         y = top + m
-        for k, desc in help_items[:13]:
+        buttons_top = fh - m - 2 * 30 * s - 6 * s
+        for k, desc in help_items:
+            if y + 18 * s > buttons_top - 6 * s:  # nepřekrývat tlačítka módů
+                break
             p.text(k, x0, y, size=int(13 * s), color=ACCENT, bold=True)
-            _, h = p.text(desc, x0 + 120 * s, y, size=int(13 * s), color=DIM)
+            _, h = p.text(desc, x0 + 170 * s, y, size=int(13 * s), color=DIM)
             y += h + 4 * s
 
-        # seznam her
-        games = " · ".join(f"{i + 1} {g.title}" for i, g in enumerate(app.game_classes[:9]))
-        p.text(games, m, fh - m, size=int(12 * s), anchor="bl", color=DIM)
+        # seznam všech módů – tlačítka na klik (aktuální zvýrazněný)
+        self.mode_buttons = []
+        n = len(app.game_classes)
+        per_row = max(1, (n + 1) // 2)
+        bw = (fw - 2 * m - (per_row - 1) * 6 * s) / per_row
+        bh = 30 * s
+        y0 = fh - m - 2 * bh - 6 * s
+        for i, g in enumerate(app.game_classes):
+            r, c = divmod(i, per_row)
+            bx, by = m + c * (bw + 6 * s), y0 + r * (bh + 6 * s)
+            cur = app.game is not None and type(app.game) is g
+            p.rect(bx, by, bw, bh, (0.25, 0.45, 0.75, 1) if cur else (0.22, 0.23, 0.27, 1))
+            p.text(mode_key(i), bx + 8 * s, by + bh / 2, size=int(12 * s), anchor="ml", bold=True,
+                   color=TEXT if cur else ACCENT)
+            p.text(g.title, bx + 8 * s + (58 if i >= 10 else 22) * s, by + bh / 2, size=int(13 * s), anchor="ml",
+                   color=TEXT if cur else DIM)
+            self.mode_buttons.append((bx, by, bw, bh, i))
         if target is None:
             self.win.swap()
 
@@ -258,6 +277,13 @@ class OperatorView:
 
     # --- myš ---------------------------------------------------------------------------------
     def mouse(self, kind: str, x: float, y: float, button: int) -> None:
+        if kind == "press" and button == MOUSE_LEFT and not self.app.calibration.active:
+            for bx, by, bw, bh, i in getattr(self, "mode_buttons", []):
+                if bx <= x <= bx + bw and by <= y <= by + bh:
+                    self.app.attract.poke()
+                    self.app.proj_win.make_current()
+                    self.app.select_game(i)
+                    return
         if self.app.calibration.active:
             uv = self.depth_panel_to_pixel(x, y)
             self.app.calibration.depth_mouse(kind, *(uv if uv else (None, None)), button)

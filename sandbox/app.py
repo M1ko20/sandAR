@@ -17,7 +17,7 @@ from .attract import AttractController
 from .calibration_store import calibration_path, load_calibration, load_play_area, save_calibration
 from .terrain import playarea
 from .config import Settings
-from .games import Game, discover_games
+from .games import Game, discover_games, mode_index, mode_key
 from .projector import ProjectorCalibration, ProjectorCompositor
 from .render.host import RenderHost
 from .render.window import (MOD_SHIFT, Window, find_projector_monitor, needs_frame_limit, operator_window_size,
@@ -181,8 +181,8 @@ class SandboxApp:
                 self.host.notify("Stiskni Esc ještě jednou pro ukončení", 2.0)
         elif name == "tab":
             self._cycle_game(-1 if shift else 1)
-        elif name.isdigit() and name != "0":
-            self.select_game(int(name) - 1)
+        elif mode_index(name, shift) is not None:
+            self.select_game(mode_index(name, shift))  # type: ignore[arg-type]
         elif name == "c":
             self.enter_calibration()
         elif name == "h":
@@ -319,7 +319,7 @@ class SandboxApp:
         if self.show_help and self.game is not None:
             lines = [f"{self.game.title}", self.game.description, ""]
             lines += [f"{k}: {d}" for k, d in self.game.keys]
-            lines += ["", "Hry: " + ", ".join(f"{i + 1} {g.title}" for i, g in enumerate(self.game_classes[:9]))]
+            lines += ["", "Hry: " + ", ".join(f"{mode_key(i)} {g.title}" for i, g in enumerate(self.game_classes))]
             p.text("\n".join(lines), cw / 2, ch / 2, size=size, anchor="mc", color=(1, 1, 1, 1),
                    background=(0, 0, 0, 0.7), padding=size)
 

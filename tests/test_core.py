@@ -68,3 +68,15 @@ def test_fit_projector_recovers_known_projector_with_parallax():
     assert rms < 1.0
     assert abs(cal.height - 1.4) < 0.1
     np.testing.assert_allclose(cal.corners, truth.corners, atol=3)
+
+
+def test_every_mode_has_a_key_and_keys_roundtrip():
+    from sandbox.games import discover_games, mode_index, mode_key
+
+    n = len(discover_games())
+    assert n <= 19  # víc módů by už šlo jen přes Tab / klik v okně obsluhy
+    for i in range(n):
+        k = mode_key(i)
+        shift = k.startswith("Shift+")
+        assert mode_index(k.removeprefix("Shift+"), shift) == i
+    assert mode_index("tab", False) is None

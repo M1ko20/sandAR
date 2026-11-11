@@ -61,7 +61,7 @@ zbytečné závislosti; config jsou dataclassy + JSON.
 - Nový mód = nový soubor v `sandbox/games/`, fyzika do `sandbox/sim/`, testy do `tests/`.
 - Texty pro návštěvníky česky (s diakritikou), čitelné ze 2 m (font ≥ výška plátna / 30), jasné barvy (tmavá místnost).
 - Mód musí reagovat na skutečný terén, mít `intro`, `reset()` a běžet s rezervou na 60 FPS (numpy vektorizovaně).
-- Klávesy, které bere jádro: Esc, Tab, 1–9, C, H, Z, Backspace (pokud ho mód nepoužije), v simulaci F, N.
+- Klávesy, které bere jádro: Esc, Tab, 0–9 (i se Shiftem), C, H, Z, Backspace (pokud ho mód nepoužije), v simulaci F, N.
 - Ověření: `pytest`, `python -m sandbox snapshot --game <id> --duration <s>` (headless PNG),
   na hardwaru `checkcal` a běh s `--duration N --snapshot-dir DIR`.
 - Font nemá všechny symboly (např. ⚠) – kresli je painterem.

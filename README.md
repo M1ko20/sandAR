@@ -84,7 +84,8 @@ Nástroj `build/kinect2_bridge/kinect2_snap` (barva srovnaná s hloubkou) se ses
 
 | Klávesa | Všude |
 |---|---|
-| 1–9, Tab | výběr hry |
+| 1–9, 0, Shift+1–9 | výběr módu (1–9, 10, 11–19); nebo klik na tlačítko v okně obsluhy |
+| Tab | další mód (Shift+Tab předchozí) |
 | C | kalibrace |
 | H | nápověda promítnutá na písek |
 | Z | zmrazit terén (výklad nad hotovým modelem) |
@@ -111,7 +112,7 @@ Nástroj `build/kinect2_bridge/kinect2_snap` (barva srovnaná s hloubkou) se ses
     Telefon musí být ve stejné síti jako počítač; otevři port: `sudo firewall-cmd --add-port=8765/tcp`.
 13. **Nejvyšší hora** – minutová soutěž, rekord dne a všech dob; V = nejhlubší propast.
 
-Módy 10+ se vybírají klávesou Tab. Úvodní slajd každého módu vysvětlí návštěvníkům, co dělat.
+Mód 10 = klávesa 0, módy 11–13 = Shift+1 až Shift+3, Tab = další; v okně obsluhy jdou všechny vybrat klikem. Úvodní slajd každého módu vysvětlí návštěvníkům, co dělat.
 
 Vlastní předlohy: PNG v šedi (bílá = nejvýš) do složky `targets/`.
 
