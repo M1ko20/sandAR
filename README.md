@@ -17,6 +17,14 @@ uv pip install --python .venv -e '.[dev]'
 ./build/kinect2_bridge/kinect2_bridge --list
 ```
 
+**Fedora a další distribuce bez apt:** skript závislosti neinstaluje, doinstaluj je ručně:
+`sudo dnf install libusb1-devel turbojpeg-devel glfw-devel`.
+
+**KDE Plasma na Waylandu:** aplikace na Waylandu nesmí sama umístit okno, takže KWin otevře okno obsluhy
+tam, kde je myš (často na projektoru). Jednorázově spusť `./scripts/kde_operator_window.sh`.
+Přidá pravidlo KWin, které okno obsluhy vždy otevře maximalizované na monitoru 0 (notebook).
+HiDPI (např. 2880×1800 při škálování 2×) funguje nativně, projektor se vykresluje 1:1.
+
 Kinect v2 musí být v **USB 3** portu a mít zapojený napájecí adaptér.
 Na Linuxu skript nainstaluje udev pravidlo (Kinect pak funguje bez sudo).
 
@@ -36,7 +44,24 @@ Na Linuxu skript nainstaluje udev pravidlo (Kinect pak funguje bez sudo).
 Projekce se automaticky otevře přes celou obrazovku na druhém monitoru (projektoru),
 na notebooku se otevře **operátorské okno** (hloubka z Kinectu, náhled projekce, stav, nápověda).
 
-## Kalibrace (jednou po postavení, klávesa C)
+## Automatická kalibrace (doporučeno)
+
+```bash
+.venv/bin/python -m sandbox autocalibrate   # ~2 min, pískoviště musí být vypnuté (Kinect volný)
+.venv/bin/python -m sandbox checkcal        # kontrola: chyba v cm + fotky do snapshots/kontrola/
+```
+
+Rohy bedny se najdou podle vnitřních hran stěn v hloubce (písek nemusí být uhlazený).
+Projektor pak promítne ~70 bílých čtverců, **barevná kamera Kinectu** je najde a z hloubky
+v těch místech se spočítá model projektoru (rohy 1–4 + výška a poloha pro korekci paralaxy).
+`checkcal` promítá body na náhodná místa (i na kopce) a měří, kam skutečně dopadly; navíc
+vyfotí promítnutou 10cm mřížku a vrstevnice po 2 cm proti vrstevnicím spočítaným z hloubky
+(`kontrola_vrstevnice.png`: zelená = promítnuto, červená = skutečný terén – mají se krýt).
+Typický výsledek: medián chyby 2–3 mm, na kopcích bez korekce paralaxy by to byly 3–4 cm.
+
+Nástroj `build/kinect2_bridge/kinect2_snap` (barva srovnaná s hloubkou) se sestaví spolu s mostem.
+
+## Ruční kalibrace (klávesa C)
 
 1. Uhlaď písek.
 2. V obraze projektoru přetáhni myší barevné úchyty **1–4** do rohů bedny (na úrovni písku).
@@ -71,10 +96,35 @@ na notebooku se otevře **operátorské okno** (hloubka z Kinectu, náhled proje
 5. **Voda a povodně** – podrž ruku nad pískem a prší; voda stéká, plní údolí a jezera.
    R déšť všude, P povodeň, X vysušit, D odtok na okrajích.
 
+6. **Kulička (minigolf)** – kulička se kutálí po skutečném svahu, postav dráhu do jamky; ruka do ní šťouchne.
+7. **Hledání pokladu** – pod pískem jsou poklady, kopej; kruh kolem ruky napovídá „Zima / Teplo / Hoří!“.
+8. **Živá sopka** – láva vyteče z nejvyššího vrcholu, stéká po svahu, chladne v černou krustu (E = erupce).
+9. **Mega tsunami** – z moře přijde vlna a zaplaví krajinu; hráze chrání města (T = vlna hned).
+10. **Živý ekosystém** – biomy, řeky, jezera, rostoucí lesy, sníh, srnky a ptáci podle terénu.
+11. **Záchrana města** – povodeň z hor, postav hráze a zachraň co nejvíc domů (Enter = start).
+12. **Digitální otisk** – vyfotí krajinu jako mapu s názvem a promítne QR ke stažení do mobilu (F/P).
+    Telefon musí být ve stejné síti jako počítač; otevři port: `sudo firewall-cmd --add-port=8765/tcp`.
+13. **Nejvyšší hora** – minutová soutěž, rekord dne a všech dob; V = nejhlubší propast.
+
+Módy 10+ se vybírají klávesou Tab. Úvodní slajd každého módu vysvětlí návštěvníkům, co dělat.
+
 Vlastní předlohy: PNG v šedi (bílá = nejvýš) do složky `targets/`.
 
 **Skóre shody** = 1 − RMSE / RMSE(rovný písek): uhlazený písek má 0 %, přesná kopie 100 %.
 Celkový posun výšky se neodečítá do chyby (množství písku žák neovlivní), okraj 5 % se nehodnotí.
+
+## Provoz na akci
+
+* **Úvodní slajd**: po přepnutí módu se na písek na 5 s promítne název a věta „jak hrát“.
+* **Attract mode**: když se 90 s nikdo nedotkne písku (žádné ruce, žádná změna terénu),
+  módy se samy střídají po 45 s a každý začíná s čistým světem. Ruka nad pískem střídání zastaví.
+  Nastavení v sekci `attract` (viz `sandbox/config.py`).
+* **Backspace** = reset aktuálního módu (nový začátek pro dalšího návštěvníka).
+* Chyba v jednom módu instalaci neshodí – zaloguje se a přepne se na topografii.
+* Log: `logs/piskoviste.log` (rotuje se), v okně obsluhy je stav senzoru, FPS, ruce a odpočet attract mode.
+* Služba s automatickým restartem: `./scripts/install_service.sh` (odebrání `--remove`).
+* Okraj u stěn: Kinect (ToF) u bílých stěn měří falešně vyšší povrch – šířku pásu, který se
+  doplňuje zevnitř, nastav `terrain.edge_margin` (u této bedny 0.09 m v `config/settings.json`).
 
 ## Nastavení
 
