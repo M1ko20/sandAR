@@ -45,6 +45,42 @@ class TerrainSettings:
 
 
 @dataclass
+class HandSettings:
+    """Detekce rukou (sandbox/terrain/hands.py). Hodnoty naladěné na Kinect v2 ~1,4 m nad pískem."""
+
+    enabled: bool = True
+    downsample: int = 2  # detekce v polovičním rozlišení (512×424 -> 256×212)
+    fg_threshold: float = 0.015  # [m] o kolik blíž než pozadí je popředí
+    edge_jump: float = 0.03  # [m] hloubkový skok mezi sousedními pixely = hrana (rozdělí ruku a písek)
+    band: float = 0.15  # [m] pás kolem bedny, kde se hledá paže vstupující do bedny
+    entry_margin: float = 0.01  # [m] o kolik za stěnou už je to „mimo bednu“
+    min_entry_px: int = 4  # pixely paže za stěnou / u okraje obrazu
+    min_area_px: int = 120  # pixely ruky uvnitř bedny (dlaň ~ 1000 px)
+    palm_depth: float = 0.08  # [m] dlaň = posledních N cm paže
+    cell: float = 0.01  # [m] metrická mřížka pro hledání konců paží
+    min_reach: float = 0.08  # [m] paže musí do bedny sahat aspoň tak daleko (cesta od vstupu)
+    min_inside: float = 0.05  # [m] dlaň musí být aspoň tak daleko od stěny bedny
+    min_hand_gap: float = 0.07  # [m] dvě dlaně blíž než tohle = jedna ruka
+    min_branch: float = 0.14  # [m] druhá ruka na téže paži/těle musí trčet aspoň tak daleko
+    max_hands_per_arm: int = 3
+    branch_max_height: float = 0.15  # [m] vedlejší větev výš nad pískem je rameno/loket, ne druhá ruka
+    entry_merge: float = 0.03  # [m] místa vstupu paže přes stěnu bližší než tohle = jedna paže
+    max_height: float = 0.40  # [m] výš nad pískem už to není ruka, ale hlava / tělo nad bednou
+    arm_thickness: float = 0.035  # [m] paže/ruka je aspoň tak vysoko nad pískem (nižší a nehybné = písek)
+    palm_guard: float = 0.10  # [m] okolí dlaně, které pozadí nikdy nepohltí
+    bg_tolerance: float = 0.008  # [m] šum pozadí
+    bg_rate: float = 0.05  # sledování pomalých změn pozadí
+    far_frames: int = 4  # [snímky] vzdálenější povrch (důlek, odchod ruky) -> pozadí
+    absorb_frames: int = 10  # [snímky] nová hromádka písku -> pozadí
+    still_frames: int = 450  # [snímky] nehybný „předmět“ dotýkající se okraje -> pozadí (15 s)
+    match_distance: float = 0.2  # [m] max. posun dlaně mezi snímky při sledování
+    confirm_frames: int = 2  # ruka se ohlásí až po N snímcích (žádné záblesky)
+    keep_frames: int = 3  # krátký výpadek ruky se přemostí
+    filter_min_cutoff: float = 2.0  # [Hz] One Euro: vyhlazení v klidu
+    filter_beta: float = 6.0  # One Euro: rychlost reakce na pohyb
+
+
+@dataclass
 class DisplaySettings:
     monitor: str = "auto"  # auto | index (0,1,..) | část názvu ("BenQ")
     windowed: bool = False
@@ -76,7 +112,7 @@ class ChallengeSettings:
 @dataclass
 class WaterSettings:
     rain_rate: float = 0.004  # [m/s] déšť po celém pískovišti
-    hand_rain_rate: float = 0.03  # [m/s] déšť pod rukou
+    hand_rain_rate: float = 0.010  # [m/s] déšť ze středu dlaně (Gaussův mráček, ~0,15 l/s na ruku)
     evaporation: float = 0.0004  # [m/s]
     flow_speed: float = 1.0  # násobek gravitace (rychlost toku)
 
@@ -102,6 +138,7 @@ class LogSettings:
 class Settings:
     sensor: SensorSettings = field(default_factory=SensorSettings)
     terrain: TerrainSettings = field(default_factory=TerrainSettings)
+    hands: HandSettings = field(default_factory=HandSettings)
     display: DisplaySettings = field(default_factory=DisplaySettings)
     map: MapSettings = field(default_factory=MapSettings)
     challenge: ChallengeSettings = field(default_factory=ChallengeSettings)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from ..render import hud
 from .base import Game
 
 FRAG = """
@@ -59,13 +60,13 @@ class HeightGame(Game):
         legend = (0.955, 0.08, 0.985, 0.92)
         self.host.draw_fullscreen(self.prog, u_gray=int(self.gray), u_range=self.range, u_legend=legend)
         cw, ch = self.host.canvas_size
-        size = max(12, ch // 45)
+        size = hud.size((cw, ch), 0.7)
         for k in range(5):
             t = k / 4
             h = self.range[1] - t * (self.range[1] - self.range[0])
             y = (legend[1] + t * (legend[3] - legend[1])) * ch
-            self.host.painter.text(f"{h * 100:+.1f} cm", legend[0] * cw - 8, y, size=size, anchor="mr",
-                                   color=(1, 1, 1, 1), outline=2)
+            hud.label(self.host.painter, f"{h * 100:+.1f} cm".replace(".", ","), legend[0] * cw - 8, y, size,
+                      anchor="mr", bg=(0, 0, 0, 0.4))
 
     def key(self, name: str, shift: bool = False) -> bool:
         if name == "g":

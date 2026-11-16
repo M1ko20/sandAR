@@ -1,7 +1,8 @@
 """Kulička (minigolf): kulička se kutálí po písku, návštěvníci staví dráhu do jamky.
 
 Fyzika je v ``sandbox/sim/ball.py`` (sklon terénu z výškové mapy, valivý odpor,
-odraz od stěn). Ruka nad kuličkou ji odkopne. Když kulička dojede do jamky
+odraz od stěn). Kulička se pohybuje jen po terénu; odpalování rukou (ruka u kuličky ji
+odstrčí) se zapíná klávesou K. Když kulička dojede do jamky
 dost pomalu, je to „jamka“: ohňostroj, započítá se čas a jamka se přesune jinam.
 
 Modul obsahuje i drobné efekty (jiskry, svítící tečky), které používá i hra Poklad.
@@ -164,11 +165,11 @@ class MinigolfGame(Game):
     id = "kulicka"
     title = "Kulička (minigolf)"
     description = "Kulička se kutálí z kopce. Postav z písku dráhu, která ji dovede do jamky s vlajkou."
-    order = 60
+    order = 70
     category = "hra"
-    intro = "Uprav písek tak, aby se svítící kulička skutálela do jamky s vlajkou – rukou ji můžeš i odstrčit."
+    intro = "Uprav písek tak, aby se svítící kulička sama skutálela do jamky s vlajkou!"
     keys = [
-        ("ruka", "odstrčit kuličku"),
+        ("K", "odpalování rukou zap/vyp (výchozí vyp)"),
         ("N", "nová kulička na start"),
         ("J", "přesunout jamku"),
         ("B", "počet kuliček 1–4"),
@@ -186,6 +187,7 @@ class MinigolfGame(Game):
         self.phys = BallPhysics()
         self.rng = np.random.default_rng()
         self.n_balls = getattr(self, "n_balls", 1)
+        self.kicks = getattr(self, "kicks", False)  # ruka odstrčí kuličku jen po zapnutí (K)
         self.slope: SlopeField | None = None
         self._slope_key: object = None
         self.sparks = Sparks()
@@ -223,7 +225,7 @@ class MinigolfGame(Game):
 
     def _move_hole(self, hm) -> None:
         pad_h = hm.sample(*self.pad)
-        self.hole = pick_spot(hm.heights, hm.size, self.rng, margin=0.12, away_from=self.pad,
+        self.hole = pick_spot(hm.heights, hm.size, self.rng, margin=0.16, away_from=self.pad,
                               min_dist=0.45 * hm.size[0], max_height=pad_h + 0.01)
         self.hole_t0 = self.t
 
@@ -264,11 +266,12 @@ class MinigolfGame(Game):
             if len(self.balls) < self.n_balls:
                 self._spawn()
         self.pending_spawn = [s for s in self.pending_spawn if s > self.t]
-        # ruka odkopne kuličku
-        for b in self.balls:
+        # ruka odstrčí kuličku (jen v režimu odpalování)
+        for b in self.balls if self.kicks else []:
             if b.kick_cooldown > 0:
                 continue
-            for hx, hy in hm.hand_points:
+            for hand in hm.hand_list:
+                hx, hy = min((hand.pos, hand.tip), key=lambda q: math.hypot(b.x - q[0], b.y - q[1]))
                 if math.hypot(b.x - hx, b.y - hy) < self.KICK_R:
                     kick(b, hx, hy, 0.8)
                     b.kick_cooldown = 1.2
@@ -350,7 +353,9 @@ class MinigolfGame(Game):
             cx, cy = host.box_to_canvas(*self.celebrate_pos)
             p.circle(cx, cy, ring, (1, 0.9, 0.2, max(0.0, 1 - since / 1.5)), width=8)
         elif self.t - self.hole_t0 > 40 and int(self.t / 6) % 2 == 0:
-            p.text("Tip: nasyp písek pod kuličku nebo ji odstrč rukou", cw / 2, ch - big * 0.4, size=fs,
+            tip = "Tip: nasyp písek pod kuličku nebo ji odstrč rukou" if self.kicks else \
+                "Tip: nasyp písek za kuličku nebo vykopej koryto k jamce"
+            p.text(tip, cw / 2, ch - big * 0.4, size=fs,
                    anchor="bc", bold=True, color=(1, 1, 1, 1), outline=4)
 
     # --- ovládání -------------------------------------------------------------------
@@ -362,6 +367,9 @@ class MinigolfGame(Game):
         elif name == "j" and hm is not None:
             self._move_hole(hm)
             self.host.notify("Jamka přesunuta")
+        elif name == "k":
+            self.kicks = not self.kicks
+            self.host.notify("Odpalování rukou zapnuto" if self.kicks else "Kulička jen po terénu")
         elif name == "b":
             self.n_balls = self.n_balls % 4 + 1
             del self.balls[self.n_balls:]
@@ -378,7 +386,8 @@ class MinigolfGame(Game):
         return True
 
     def status(self) -> list[str]:
-        lines = [f"Jamky: {self.holes_made}", f"Kuliček: {len(self.balls)}/{self.n_balls}",
+        lines = [f"Jamky: {self.holes_made}", f"Kuliček: {len(self.balls)}/{self.n_balls} · odpalování rukou: "
+                 + ("ano" if self.kicks else "ne"),
                  f"Gravitace {self.phys.gravity / 9.81:.2f} g"]
         if self.times:
             lines.append(f"Poslední {self.times[-1]:.0f} s, nejlepší {self.best:.0f} s")

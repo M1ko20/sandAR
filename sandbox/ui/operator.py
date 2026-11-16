@@ -10,7 +10,7 @@ import numpy as np
 
 from ..games import mode_key
 from ..render.painter import Painter
-from ..render.window import MOUSE_LEFT, MOUSE_RIGHT, Window
+from ..render.window import MOUSE_LEFT, MOUSE_MIDDLE, MOUSE_RIGHT, Window
 
 if TYPE_CHECKING:
     from ..app import SandboxApp
@@ -30,7 +30,8 @@ GLOBAL_KEYS = [
     ("Z", "zmrazit terén"),
     ("Esc 2×", "konec"),
 ]
-SIM_KEYS = [("myš", "hrabání písku (L = přidat, P = ubrat)"), ("F / N", "uhladit / nový terén")]
+SIM_KEYS = [("myš", "písek: L = přidat, P = ubrat, prostřední = ruka"), ("F / N", "uhladit / nový terén")]
+HAND_COLOR = (1.0, 0.35, 0.9, 1)
 
 
 class OperatorView:
@@ -99,6 +100,11 @@ class OperatorView:
             t = 1 - (depth - lo) / max(hi - lo, 1e-3)
         img = cv2.applyColorMap((np.clip(t, 0, 1) * 255).astype(np.uint8), cv2.COLORMAP_TURBO)
         img[~valid] = 0
+        proc = self.app.terrain.processor
+        det = proc.hand_detector if proc is not None else None
+        if det is not None and det.pixel_mask.shape == img.shape[:2] and det.pixel_mask.any():
+            m = det.pixel_mask  # co detektor považuje za ruku/paži (terén to ignoruje)
+            img[m] = (img[m] * 0.35 + np.array([230, 80, 255]) * 0.65).astype(np.uint8)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         hh, ww = depth.shape
         if self.depth_tex is None or self.depth_tex.size != (ww, hh):
@@ -203,11 +209,15 @@ class OperatorView:
         p.text(f"Promítání (pohled shora, {W * 100:.0f} × {D * 100:.0f} cm)", cx, cy - 4 * s,
                size=int(13 * s), anchor="bl", color=DIM)
         hm = app.host.heightmap
-        if hm is not None:  # ladění: kde systém vidí ruce
-            for hx, hy in hm.hand_points:
-                px, py = cx + hx / W * cw, cy + hy / D * ch
-                p.circle(px, py, 12 * s, (1.0, 0.3, 0.9, 1), width=2.5 * s)
-                p.text("ruka", px + 14 * s, py, size=int(12 * s), anchor="ml", color=(1.0, 0.5, 0.95, 1), outline=2)
+        if hm is not None:  # ladění: kde systém vidí ruce (číslo ruky, výška dlaně nad pískem)
+            for hand in hm.hand_list:
+                px, py = cx + hand.x / W * cw, cy + hand.y / D * ch
+                tx, ty = cx + hand.tip_x / W * cw, cy + hand.tip_y / D * ch
+                p.polyline([(px, py), (tx, ty)], HAND_COLOR, 2 * s)
+                p.circle(px, py, 11 * s, HAND_COLOR, width=2.5 * s)
+                p.circle(tx, ty, 3.5 * s, (1, 1, 1, 1))
+                p.text(f"{hand.id} · {hand.height * 100:.0f} cm", px + 14 * s, py, size=int(12 * s), anchor="ml",
+                       color=(1.0, 0.6, 0.95, 1), outline=2)
         for i, (bx, by) in enumerate([(cx, cy), (cx + cw, cy), (cx + cw, cy + ch), (cx, cy + ch)]):
             p.text(str(i + 1), bx, by, size=int(13 * s), anchor="mc", bold=True, color=CORNER_COLORS[i],
                    outline=2, background=None)
@@ -292,6 +302,12 @@ class OperatorView:
         """Simulace: držením tlačítka myši se přidává / ubírá písek."""
         sensor = self.app.sensor
         buttons = self.win.buttons()
+        if hasattr(sensor, "set_hands"):  # prostřední tlačítko = virtuální ruka 8 cm nad pískem
+            box = self.canvas_panel_to_box(*self.win.cursor()) if MOUSE_MIDDLE in buttons else None
+            want = [(box[0], box[1], 0.08)] if box else []
+            if want != getattr(self, "_sim_hands", []):
+                self._sim_hands = want
+                sensor.set_hands(want)
         if not sensor.supports_interaction or not buttons or self.app.calibration.active:
             return
         amount = 0.12 * dt * (1 if MOUSE_LEFT in buttons else -1 if MOUSE_RIGHT in buttons else 0)

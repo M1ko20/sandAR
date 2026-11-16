@@ -8,6 +8,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from ..render import hud
 from .base import Game
 
 FRAG = """
@@ -92,7 +93,7 @@ class MapGame(Game):
         if not self.show_peaks:
             return
         p = self.host.painter
-        size = max(14, self.host.canvas_size[1] // 32)
+        size = hud.size(self.host.canvas_size, 0.72)
         for iy, ix, h in self.peaks:
             x, y = self.host.grid_to_canvas(ix, iy)
             s = size * 0.45

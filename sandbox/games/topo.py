@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..render import hud
 from .base import Game
 
 FRAG = """
@@ -77,8 +78,8 @@ class TopoGame(Game):
         while h <= m.elevation_max + 1e-9:
             k = (m.elevation_max - h) / (m.elevation_max - m.elevation_min)
             y = (rect[1] + k * (rect[3] - rect[1])) * ch
-            host.painter.text(f"{host.altitude(h):.0f} m", rect[0] * cw - 8, y, size=max(12, ch // 45),
-                              anchor="mr", color=(1, 1, 1, 1), outline=2)
+            hud.label(host.painter, f"{host.altitude(h):.0f} m", rect[0] * cw - 8, y, hud.size((cw, ch), 0.7),
+                      anchor="mr", bg=(0, 0, 0, 0.4))
             h += step
 
     def key(self, name: str, shift: bool = False) -> bool:

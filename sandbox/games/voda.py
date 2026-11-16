@@ -1,14 +1,16 @@
 """Voda: déšť, stékání ze svahů, jezera a povodně.
 
 Simulace mělké vody metodou „virtuálních trubek“ (Mei et al. 2007): mezi
-sousedními buňkami teče voda úměrně rozdílu hladin. Déšť padá tam, kam žák
-podrží ruku nad pískem (Kinect ruku vidí), nebo všude po stisku R.
+sousedními buňkami teče voda úměrně rozdílu hladin. Z každé dlaně držené nad pískem
+prší (na hřbetu ruky se promítne mráček, kolem dopadají kapky); ruka v písku neprší,
+aby šlo kopat koryta. Klávesou R prší všude.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
+from ..render.fx import RainFx
 from ..sim.water import WaterSim
 from .base import Game
 
@@ -42,12 +44,12 @@ void main() {
 class WaterGame(Game):
     id = "voda"
     title = "Voda a povodně"
-    description = "Podrž ruku nad pískem a začne pršet. Voda stéká do údolí a tvoří jezera."
+    description = "Podrž dlaň nad pískem a začne z ní pršet. Voda stéká do údolí a tvoří jezera."
     order = 50
     category = "simulace"
-    intro = "Podrž ruku nad pískem a začne pršet – kam poteče voda?"
+    intro = "Podrž dlaň nad pískem – začne z ní pršet. Kam poteče voda?"
     keys = [
-        ("ruka", "déšť pod rukou"),
+        ("ruka", "déšť z dlaně (ruka v písku neprší)"),
         ("R", "déšť všude zap/vyp"),
         ("P", "povodeň (+1 cm vody)"),
         ("X", "vysušit"),
@@ -61,6 +63,12 @@ class WaterGame(Game):
         self.tex = None
         self.raining = False
         self.drain = False
+        self.fx = RainFx()
+        self.clouds: list[tuple[float, float, float]] = []
+        self._cloud_k: dict[int, float] = {}
+        self._xy = None
+        self.t = 0.0
+        self.last_rain = -99.0
 
     def stop(self) -> None:
         self.prog.release()
@@ -74,27 +82,65 @@ class WaterGame(Game):
             if self.tex is not None:
                 self.tex.release()
             self.tex = self.host.float_texture((hm.shape[1], hm.shape[0]))
+            self._xy = hm.cell_centers()
         cfg = self.host.settings.water
         dt = min(dt, 1 / 20)
+        self.t += dt
         if self.raining:
             self.sim.depth += cfg.rain_rate * dt
-        if hm.hands is not None and cfg.hand_rain_rate > 0:
-            self.sim.depth[hm.hands] += cfg.hand_rain_rate * dt
+            self.last_rain = self.t
+        self._hand_rain(hm, dt, cfg.hand_rain_rate)
         self.sim.advance(hm.heights, dt, 9.81 * cfg.flow_speed, self.drain)
         if cfg.evaporation > 0:
             np.maximum(self.sim.depth - cfg.evaporation * dt, 0, out=self.sim.depth)
         assert self.tex is not None
         self.tex.write(self.sim.depth.tobytes())
 
+    def _hand_rain(self, hm, dt: float, rate: float) -> None:
+        """Z každé dlaně nad pískem prší (Gaussův mráček ~ 5 cm). Mráček se plynule rozsvítí / zhasne."""
+        assert self._xy is not None and self.sim is not None
+        X, Y = self._xy
+        alive = set()
+        sources = []
+        for hand in hm.hand_list:
+            raining = 0.03 < hand.height < 0.45
+            k = self._cloud_k.get(hand.id, 0.0)
+            k = min(1.0, k + dt * 4) if raining else max(0.0, k - dt * 4)
+            self._cloud_k[hand.id] = k
+            alive.add(hand.id)
+            if k > 0:
+                sources.append((hand.x, hand.y, k))
+        for hid in list(self._cloud_k):
+            if hid not in alive:
+                del self._cloud_k[hid]
+        if rate > 0:
+            for x, y, k in sources:
+                r2 = (X - x) ** 2 + (Y - y) ** 2
+                near = r2 < 0.15 ** 2
+                self.sim.depth[near] += (rate * dt * k) * np.exp(-r2[near] / (2 * 0.05 ** 2))
+        if sources:
+            self.last_rain = self.t
+        self.clouds = sources
+        self.fx.update(dt, sources)
+
     def render(self) -> None:
         if self.tex is None:
             return
         self.host.draw_fullscreen(self.prog, u_water=(self.tex, 1))
+        self.fx.draw(self.host, self.clouds)
+        if self.t - self.last_rain > 8.0 and self.sim is not None and self.sim.volume < 0.002:
+            p = self.host.painter
+            cw, ch = self.host.canvas_size
+            size = max(18, ch // 24)
+            p.text("Podrž dlaň nad pískem – začne z ní pršet", cw / 2, ch - size * 0.7, size=size, anchor="bc",
+                   bold=True, color=(1, 1, 1, 1), outline=max(2, size // 10), background=(0, 0.05, 0.15, 0.55),
+                   padding=size * 0.3)
 
     def reset(self) -> None:
         if self.sim is not None:
             self.sim.clear()
         self.raining = False
+        self.fx.clear()
 
     def key(self, name: str, shift: bool = False) -> bool:
         cfg = self.host.settings.water

@@ -82,14 +82,15 @@ def render_snapshots(settings: Settings, out_dir: Path, frames: int = 20, size: 
         if only and cls.id != only:
             continue
         hm = None
+        sim.set_hands([])
         for i in range(frames):
-            hm = proc.process(sim.render_depth(), seq=i)
+            hm = proc.process(sim.render_depth(), seq=i, timestamp=i / 30)
+        # virtuální ruka nad pískem pro hry, které na ruce reagují (skutečná detekce, ne podvrh)
+        W, D = sim.BOX_SIZE
+        sim.set_hands([(W * 0.3, D * 0.42, 0.10)])
+        for i in range(frames, frames + 6):
+            hm = proc.process(sim.render_depth(), seq=i, timestamp=i / 30)
         assert hm is not None
-        # trocha "rukou" pro hry, které na ně reagují
-        hands = np.zeros(hm.shape, bool)
-        hands[hm.shape[0] // 3: hm.shape[0] // 2, hm.shape[1] // 4: hm.shape[1] // 3] = True
-        hm.hands = hands
-        hm.hand_points = proc.hand_points(hands)
         host.update_heightmap(hm)
         game = cls(host)
         game.start()

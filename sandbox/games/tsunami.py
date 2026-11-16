@@ -17,6 +17,8 @@ import numpy as np
 
 from ..sim.lava import blur3, downsample
 from ..sim.water import WaterSim
+from ..render import hud
+from ..render.text import get_font
 from .base import Game
 
 FRAG = """
@@ -204,7 +206,7 @@ class TsunamiGame(Game):
     id = "tsunami"
     title = "Mega tsunami"
     description = "Z moře přijde obří vlna a prožene se krajinou. Postav hráze a ochraň města!"
-    order = 72
+    order = 65
     category = "zážitek"
     intro = "Postav z písku hráze a kopce, ať obří vlna z moře nezaplaví města – vlna přijde každou půlminutu!"
     keys = [
@@ -482,12 +484,15 @@ class TsunamiGame(Game):
                        color=(1, 0.85, 0.3, 1), outline=3)
         elif self.phase == WARN:
             n = max(1, math.ceil(remaining))
-            big = int(ch / 7)
+            text = f"TSUNAMI za {n}…"
+            big = hud.fit("TSUNAMI za 8…", ch / 7, cw * 0.62)  # stejná velikost pro všechna čísla
             on = (self.phase_t % 0.5) < 0.32
             col = (1, 0.2, 0.1, 1) if on else (1, 0.9, 0.2, 1)
-            w, _ = p.text(f"TSUNAMI za {n}…", cw / 2 + big * 0.45, ch / 2, size=big, anchor="mc", bold=True,
-                          color=col, outline=6)
-            self._warning_sign(cw / 2 - w / 2 - big * 0.2, ch / 2, big * 1.1, (1, 0.85, 0.1, 1))
+            sign = big * 1.1
+            w = get_font(big, True).getlength(text)
+            x0 = (cw - (sign + big * 0.3 + w)) / 2  # značka + mezera + text, celé na střed
+            self._warning_sign(x0 + sign / 2, ch / 2, sign, (1, 0.85, 0.1, 1))
+            p.text(text, x0 + sign + big * 0.3, ch / 2, size=big, anchor="ml", bold=True, color=col, outline=6)
         elif self.phase in (WAVE, RECEDE):
             title = "VLNA!" if self.phase == WAVE else "Voda ustupuje zpět do moře…"
             p.text(title, cw / 2, top_y, size=int(size * (1.4 if self.phase == WAVE else 1.0)), anchor="tc",

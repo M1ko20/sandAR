@@ -27,6 +27,7 @@ CATEGORY_LABEL = {
     "soutěž": "SOUTĚŽ",
     "hra": "HRA",
     "zážitek": "ZÁŽITEK",
+    "dva hráči": "HRA PRO DVA HRÁČE",
 }
 
 

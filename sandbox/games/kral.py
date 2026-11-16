@@ -37,7 +37,7 @@ class KingOfHillGame(Game):
     title = "Král kopce"
     description = "Dva hráči: body dostává ten, kdo má ve své půlce nejvyšší vrchol. Písek si berete navzájem!"
     order = 95
-    category = "soutěž"
+    category = "dva hráči"
     intro = "Postav ve své půlce nejvyšší kopec! Kdo je zrovna nejvýš, sbírá body."
     keys = [("Enter / mezerník", "nové kolo hned"), ("X", "ukončit kolo")]
 
@@ -77,7 +77,7 @@ class KingOfHillGame(Game):
     def update(self, hm, dt: float) -> None:
         self.t += dt
         self.state_t += dt
-        hands = hm.hands is not None and int(hm.hands.sum()) > 12
+        hands = hm.has_hands
         self.hand_time = self.hand_time + dt if hands else 0.0
         self.peaks = [vs.zone_peak(hm.heights, hm.hands, z) for z in self.zones(hm)]
         a, b = self.peaks

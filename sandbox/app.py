@@ -25,7 +25,10 @@ from .render.window import (MOD_SHIFT, Window, find_projector_monitor, needs_fra
                             terminate_glfw)
 from .sensor import create_sensor
 from .terrain import KinectCalibration, TerrainService
+from .terrain.hands import outer_rect
 from .ui.calibration import CalibrationMode
+from .render import hud
+from .ui.help_overlay import draw_help
 from .ui.operator import OperatorView
 
 log = logging.getLogger(__name__)
@@ -46,7 +49,8 @@ class SandboxApp:
         self.play_area = load_play_area(self.cal_path)
         self.full_kc, self.full_pc = kinect_cal, proj_cal
         kinect_cal, proj_cal = playarea.apply(kinect_cal, proj_cal, self.play_area)
-        self.terrain = TerrainService(self.sensor, settings.terrain, kinect_cal)
+        self.terrain = TerrainService(self.sensor, settings.terrain, kinect_cal, settings.hands,
+                                      outer_rect(self.full_kc, kinect_cal) if kinect_cal else None)
 
         # okna
         disp = settings.display
@@ -106,7 +110,8 @@ class SandboxApp:
         self.host.heightmap = None
 
     def set_kinect_calibration(self, cal: KinectCalibration | None) -> None:
-        self.terrain.set_calibration(cal)
+        outer = outer_rect(self.full_kc, cal) if cal is not None and self.full_kc is not None else None
+        self.terrain.set_calibration(cal, outer)
         self._configure_host()
         if self.game is not None:  # hra si znovu vytvoří textury pro nový rozměr
             self.game.stop()
@@ -311,17 +316,13 @@ class SandboxApp:
     def _canvas_overlays(self) -> None:
         """Nápověda a krátké zprávy přímo na písku."""
         p, host = self.host.painter, self.host
-        cw, ch = host.canvas_size
-        size = max(14, ch // 34)
+        canvas = host.canvas_size
         msgs = host.active_messages()
         if msgs and not self.calibration.active:
-            p.text(msgs[-1], size, ch - size, size=size, anchor="bl", color=(1, 1, 1, 1), outline=3)
-        if self.show_help and self.game is not None:
-            lines = [f"{self.game.title}", self.game.description, ""]
-            lines += [f"{k}: {d}" for k, d in self.game.keys]
-            lines += ["", "Hry: " + ", ".join(f"{mode_key(i)} {g.title}" for i, g in enumerate(self.game_classes))]
-            p.text("\n".join(lines), cw / 2, ch / 2, size=size, anchor="mc", color=(1, 1, 1, 1),
-                   background=(0, 0, 0, 0.7), padding=size)
+            sz = hud.size(canvas, 0.8)
+            hud.label(p, msgs[-1], sz * 0.4, canvas[1] - sz * 2.2, sz, anchor="bl")
+        if self.show_help and self.game is not None and not self.calibration.active:
+            draw_help(host, self.game, self.game_classes, mode_key)
 
     def snapshot(self, directory: Path) -> None:
         """Uloží aktuální obraz projektoru a operátorského okna jako PNG (ladění)."""

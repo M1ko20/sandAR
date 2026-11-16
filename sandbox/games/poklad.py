@@ -147,7 +147,7 @@ class TreasureGame(Game):
     id = "poklad"
     title = "Hledání pokladu"
     description = "Pod pískem jsou zakopané poklady. Kopej – ruka ti napoví, jestli jsi blízko."
-    order = 65
+    order = 75
     category = "soutěž"
     intro = "Pod pískem jsou zakopané poklady – hrabej a najdi je všechny co nejrychleji, ruka ti napoví, kde hledat."
     keys = [

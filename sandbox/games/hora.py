@@ -127,7 +127,7 @@ class HighestMountainGame(Game):
     id = "hora"
     title = "Nejvyšší hora"
     description = "Soutěž: kdo za minutu postaví nejvyšší horu? Rekordy dne a všech dob. V = nejhlubší propast."
-    order = 92
+    order = 85
     category = "soutěž"
     intro = "Máš 60 sekund – postav co nejvyšší horu a překonej dnešní rekord!"
     keys = [("Enter / mezerník", "nové kolo hned"), ("V", "nejvyšší hora / nejhlubší propast"),
@@ -179,7 +179,7 @@ class HighestMountainGame(Game):
     def update(self, hm, dt: float) -> None:
         self.t += dt
         self.state_t += dt
-        hands = hm.hands is not None and int(hm.hands.sum()) > 12
+        hands = hm.has_hands
         self.hand_time = self.hand_time + dt if hands else 0.0
         if self.t >= self._next_measure:  # stačí 10x za sekundu
             self._next_measure = self.t + 0.1

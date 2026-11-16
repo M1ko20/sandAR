@@ -13,7 +13,7 @@ from sandbox.projector.calibration import ProjectorCalibration
 
 def test_games_are_discovered():
     ids = [g.id for g in discover_games()]
-    assert ids[:5] == ["topo", "mapa", "vyska", "predloha", "voda"]
+    assert ids[:5] == ["topo", "mapa", "vyska", "krajina", "voda"]
 
 
 def test_water_conserves_volume_and_flows_downhill():
@@ -39,11 +39,19 @@ def test_water_drain_removes_water():
 
 
 @pytest.mark.parametrize("target", BUILTIN, ids=lambda t: t.name)
-def test_targets_have_requested_relief_and_zero_mean(target):
-    grid = target.grid((96, 128), (1.0, 0.75), 0.10)
-    assert grid.shape == (96, 128)
-    assert abs(grid.mean()) < 1e-4
-    assert grid.max() - grid.min() == pytest.approx(0.10, rel=1e-3)
+def test_targets_have_relief_base_and_main_part(target):
+    grid, mask = target.layout((96, 128), (1.0, 0.75), 0.10)
+    assert grid.shape == mask.shape == (96, 128)
+    assert max(grid.max(), -grid.min() / 0.6) == pytest.approx(0.10, rel=1e-3)
+    assert np.median(grid[~mask]) == pytest.approx(0.0, abs=1e-3)  # okolí = okolní písek
+    assert 0.08 < mask.mean() < 0.5  # hodnotí se hlavní část, ne celá bedna
+
+
+def test_only_main_part_is_scored():
+    grid, mask = BUILTIN[0].layout((96, 128), (1.0, 0.75), 0.10)
+    messy = grid + np.where(mask, 0, 0.05 * np.sin(np.arange(128) / 3)[None, :]).astype(np.float32)
+    assert evaluate(messy, grid, 0.015, mask=mask)[0].score == pytest.approx(100, abs=0.5)
+    assert evaluate(messy, grid, 0.015)[0].score < 90  # bez masky by nepořádek okolo vadil
 
 
 def test_score_perfect_flat_and_offset():

@@ -26,7 +26,8 @@ def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python -m sandbox", description="Interaktivní AR pískoviště",
                                 formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
     p.add_argument("command", nargs="?", default="run",
-                   choices=["run", "calibrate", "games", "monitors", "record", "snapshot", "autocalibrate", "checkcal", "fitarea"])
+                   choices=["run", "calibrate", "games", "monitors", "record", "snapshot", "autocalibrate", "checkcal", "fitarea",
+                            "ortofoto"])
     p.add_argument("--sensor", choices=["auto", "kinect2", "sim", "replay"], help="zdroj hloubky")
     p.add_argument("--replay", metavar="SOUBOR", help="nahrávka pro --sensor replay")
     p.add_argument("--pipeline", choices=["gl", "cpu"], help="dekódování Kinectu v2")
@@ -93,6 +94,13 @@ def main(argv: list[str] | None = None) -> int:
 
         out = args.out or RECORDINGS_DIR / "nahravka.npz"
         print(f"Uloženo: {record(settings, args.seconds, out)}")
+        return 0
+
+    if args.command == "ortofoto":
+        from .ortofoto import download_all
+
+        for line in download_all():
+            print(line)
         return 0
 
     if args.command == "snapshot":

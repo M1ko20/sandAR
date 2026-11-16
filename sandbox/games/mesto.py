@@ -58,8 +58,10 @@ PLAN, PREP, FLOOD, RESULT = "plánování", "příprava", "povodeň", "výsledek
 
 
 def draw_house(p, h: eco.House, sx: float, sy: float, clock: float, saved_ring: bool = False,
-               ring_color=(0.2, 1.0, 0.35, 0.95)) -> None:
-    """Domek se sedlovou střechou (kostel s věží); zatopený bliká červeně, zachráněný má zelený kruh."""
+               ring_color=(0.2, 1.0, 0.35, 0.95), damage: str = "water") -> None:
+    """Domek se sedlovou střechou (kostel s věží); zatopený bliká červeně, zachráněný má zelený kruh.
+
+    ``damage="fire"``: zasažený dům (láva) je ohořelý a chvíli hoří."""
     cx, cy = h.x * sx, h.y * sy
     c, s = math.cos(h.angle), math.sin(h.angle)
     L, W = h.length * sx / 2, h.width * sy / 2
@@ -70,7 +72,9 @@ def draw_house(p, h: eco.House, sx: float, sy: float, clock: float, saved_ring: 
 
     flooded = h.flooded
     since = clock - h.flooded_at
-    if flooded:
+    if flooded and damage == "fire":
+        roof_a, roof_b = (0.20, 0.16, 0.14, 1), (0.11, 0.09, 0.08, 1)
+    elif flooded:
         roof_a, roof_b = (0.35, 0.45, 0.75, 1), (0.22, 0.30, 0.60, 1)
     elif h.church:
         roof_a, roof_b = (0.95, 0.75, 0.25, 1), (0.75, 0.52, 0.12, 1)
@@ -101,7 +105,14 @@ def draw_house(p, h: eco.House, sx: float, sy: float, clock: float, saved_ring: 
         p.triangles(tr([[L * 0.35, -W * 0.75], [L * 0.6, -W * 0.75], [L * 0.6, -W * 0.4], [L * 0.35, -W * 0.75],
                         [L * 0.6, -W * 0.4], [L * 0.35, -W * 0.4]]), (0.3, 0.12, 0.08, 1))  # komín
     R = max(L, W) * 1.5
-    if flooded:
+    if flooded and damage == "fire":
+        # plameny: blikající oranžová záře, po chvíli jen doutná
+        k = max(0.25, 1.0 - since / 6.0)
+        for i, (dx, dy) in enumerate(((0, 0), (0.5, -0.3), (-0.5, 0.2))):
+            fl = 0.6 + 0.4 * math.sin(clock * (9 + i * 3) + i)
+            p.circle(cx + dx * L, cy + dy * W, R * 0.55 * fl, (1.0, 0.45 + 0.3 * fl, 0.05, 0.75 * k), segments=16)
+            p.circle(cx + dx * L, cy + dy * W, R * 0.25 * fl, (1.0, 0.95, 0.5, 0.9 * k), segments=12)
+    elif flooded:
         # červený blikající kruh + šplouchnutí
         blink = 0.55 + 0.45 * math.sin(clock * 7)
         p.circle(cx, cy, R, (1.0, 0.1, 0.1, blink), width=max(3, R * 0.14))
@@ -116,7 +127,7 @@ class TownGame(Game):
     id = "mesto"
     title = "Záchrana města"
     description = "Z hor přijde povodeň. Postav hráze a kanály a zachraň co nejvíc domů."
-    order = 82
+    order = 80
     category = "soutěž"
     intro = "Za chvíli přijde povodeň – postav z písku hráze a kanály, ať voda obteče městečko!"
     keys = [

@@ -51,7 +51,7 @@ class Game:
     description: ClassVar[str] = ""
     order: ClassVar[int] = 100  # pořadí v menu (klávesy 1..9, dál Tab)
     keys: ClassVar[list[tuple[str, str]]] = []  # nápověda: (klávesa, popis)
-    category: ClassVar[str] = "vizualizace"  # vizualizace | simulace | soutěž | hra | zážitek
+    category: ClassVar[str] = "vizualizace"  # vizualizace | simulace | soutěž | hra | zážitek | dva hráči
     intro: ClassVar[str] = ""  # jedna věta pro návštěvníky „jak hrát“ – promítne se po spuštění
     attract: ClassVar[bool] = True  # smí se ukazovat v attract mode (samo se střídá, když nikdo nehraje)
 

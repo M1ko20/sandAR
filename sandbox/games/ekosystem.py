@@ -4,9 +4,12 @@
   skály na strmých stěnách a nad hranicí lesa, sníh na vrcholcích,
 * řeky stékají z hor údolími (akumulace toku D8), ve sníženinách vznikají jezera,
 * stromy postupně vyrůstají a hynou, když je zasypeš, vykopeš nebo zatopíš,
-* srnky se pasou na loukách (utíkají před rukou), nad krajinou krouží ptáci.
+* 12 druhů zvířat, každý ve svém prostředí (``sandbox/sim/fauna.py``): ryby a kachny ve vodě,
+  krabi a želvy na pláži, srnky, zajíci a lišky na loukách, medvěd v lese, kamzíci na skalách,
+  nad horami krouží orel, nad krajinou ptáci a motýli. Počet roste s velikostí prostředí,
+  plachá zvířata utíkají před rukou.
 
-Logika je v ``sandbox/sim/ecosystem.py``, tady je jen kreslení.
+Logika je v ``sandbox/sim/ecosystem.py`` a ``sandbox/sim/fauna.py``, tady je jen kreslení.
 """
 
 from __future__ import annotations
@@ -17,7 +20,9 @@ import cv2
 import moderngl
 import numpy as np
 
+from ..render.fauna import draw_fauna
 from ..sim import ecosystem as eco
+from ..sim.fauna import Fauna
 from .base import Game
 
 FRAG = """
@@ -111,10 +116,10 @@ def disc_triangles(cx: np.ndarray, cy: np.ndarray, r: np.ndarray, seg: int = 14,
 class EcosystemGame(Game):
     id = "ekosystem"
     title = "Živý ekosystém"
-    description = "Na písku roste živá krajina: řeky, jezera, lesy, sníh na horách a zvířata."
-    order = 80
+    description = "Na písku roste živá krajina: řeky, jezera, lesy, sníh na horách a zvířata, každé ve svém domově."
+    order = 55
     category = "zážitek"
-    intro = "Postav hory a vykopej údolí – z hor potečou řeky, na svazích vyroste les a na loukách se budou pást srnky."
+    intro = "Postav hory a vykopej jezera – v každém prostředí se usadí jiná zvířata: ryby, kamzíci, srnky, medvěd…"
     keys = [
         ("R", "řeky zap/vyp"),
         ("A", "zvířata zap/vyp"),
@@ -133,7 +138,7 @@ class EcosystemGame(Game):
         self.lake_tex = None
         self.hydro: eco.Hydrology | None = None
         self.veg: eco.Vegetation | None = None
-        self.animals: eco.Animals | None = None
+        self.animals: Fauna | None = None
         self.show_rivers = True
         self.show_animals = True
         self.clock = 0.0
@@ -163,7 +168,7 @@ class EcosystemGame(Game):
             # stromy a zvířata v metrech – na větší bedně jich je víc
             area = hm.size[0] * hm.size[1]
             self.veg = eco.Vegetation(hm.size, max_trees=int(200 * area) + 60, radius=0.017)
-            self.animals = eco.Animals(hm.size, n_deer=max(3, int(4 * area)), n_birds=4)
+            self.animals = Fauna(hm.size)
 
     def _classify(self, hm) -> None:
         m = self.host.settings.map
@@ -209,7 +214,17 @@ class EcosystemGame(Game):
         assert self.veg is not None and self.animals is not None
         self.veg.step(dt)
         self.veg.spawn(dt, self.heights, self.biome, self.wet, self.slope)
-        self.animals.step(dt, self.biome, self.wet, hm.hand_points)
+        hands = [h.pos for h in hm.hand_list] + [h.tip for h in hm.hand_list] if hm.hand_list else hm.hand_points
+        self.animals.step(dt, self.biome, self.wet, self._water(hm.shape), hands)
+
+    def _water(self, shape: tuple[int, int]) -> np.ndarray:
+        """Buňky pod vodou: moře + jezera (pro ryby a kachny)."""
+        sea = self.biome == eco.WATER if self.biome is not None else np.zeros(shape, bool)
+        if self.hydro is None or not self.show_rivers:
+            return sea
+        lake = cv2.resize((self.hydro.lake > 0.002).astype(np.uint8), (shape[1], shape[0]),
+                          interpolation=cv2.INTER_NEAREST).astype(bool)
+        return sea | lake
 
     # --- kreslení -------------------------------------------------------------------------------
     def render(self) -> None:
@@ -220,9 +235,8 @@ class EcosystemGame(Game):
                                   u_beach=p.beach, u_forest_h=p.forest_height, u_forest_s=p.forest_slope,
                                   u_treeline=p.treeline, u_snow=p.snow, u_rock_s=p.rock_slope)
         self._draw_trees()
-        if self.show_animals:
-            self._draw_deer()
-            self._draw_birds()
+        if self.show_animals and self.animals is not None:
+            draw_fauna(self.host, self.animals, self.clock)
 
     def _px(self) -> tuple[float, float]:
         cw, ch = self.host.canvas_size
@@ -265,54 +279,6 @@ class EcosystemGame(Game):
                                np.repeat(light[:, None], 30, 1)], 1).reshape(-1, 4)
         p.triangles(verts, cols)
 
-    def _draw_deer(self) -> None:
-        a = self.animals
-        if a is None or a.n_deer == 0:
-            return
-        sx, sy = self._px()
-        p = self.host.painter
-        L = 0.032 * sx  # délka těla v px
-        for (x, y), hd, vis in zip(a.deer, a.heading, a.visible):
-            if vis < 0.05:
-                continue
-            cx, cy = x * sx, y * sy
-            c, s = math.cos(hd), math.sin(hd)
-            # tělo = protáhlý šestiúhelník
-            body = np.array([[1.0, 0], [0.5, 0.42], [-0.5, 0.42], [-1.0, 0], [-0.5, -0.42], [0.5, -0.42]]) * L * 0.5
-            rot = np.array([[c, s], [-s, c]])
-            pts = body @ rot + [cx, cy]
-            tris = np.array([[pts[0], pts[i], pts[i + 1]] for i in range(1, 5)]).reshape(-1, 2)
-            shadow = tris + [L * 0.15, L * 0.2]
-            p.triangles(shadow, (0, 0, 0, 0.35 * vis))
-            p.triangles(tris, (0.62, 0.34, 0.12, vis))
-            hx, hy = cx + c * L * 0.62, cy + s * L * 0.62
-            p.circle(hx, hy, L * 0.22, (0.50, 0.26, 0.08, vis), segments=10)
-            p.circle(cx - c * L * 0.48, cy - s * L * 0.48, L * 0.13, (1, 1, 1, vis), segments=8)  # bílé zrcátko
-
-    def _draw_birds(self) -> None:
-        a = self.animals
-        if a is None:
-            return
-        sx, sy = self._px()
-        p = self.host.painter
-        pos, head = a.birds()
-        span = 0.04 * sx
-        for k, ((x, y), hd) in enumerate(zip(pos, head)):
-            cx, cy = x * sx, y * sy
-            flap = 0.45 + 0.35 * math.sin(self.clock * 9 + k * 1.7)
-            c, s = math.cos(hd), math.sin(hd)
-            back = -flap
-            wing = []
-            for side in (-1, 1):
-                wx = cx + (-s * side) * span * 0.5 + c * back * span * 0.35
-                wy = cy + (c * side) * span * 0.5 + s * back * span * 0.35
-                wing.append((wx, wy))
-            line = [wing[0], (cx + c * span * 0.12, cy + s * span * 0.12), wing[1]]
-            shadow = [(u + span * 0.6, v + span * 0.8) for u, v in line]
-            p.polyline(shadow, (0, 0, 0, 0.35), width=span * 0.16)
-            p.polyline(line, (0.05, 0.05, 0.08, 1), width=span * 0.2)
-            p.polyline(line, (1, 1, 1, 1), width=span * 0.1)
-
     # --- ovládání --------------------------------------------------------------------------------
     def key(self, name: str, shift: bool = False) -> bool:
         m = self.host.settings.map
@@ -346,6 +312,10 @@ class EcosystemGame(Game):
             lines.append(" · ".join(f"{n} {f:.0f} %" for n, f in zip(eco.BIOME_NAMES, frac)))
         if self.veg is not None:
             lines.append(f"Stromy: {int(self.veg.alive.sum())} (uhynulo {self.veg.deaths})")
+        if self.animals is not None:
+            from ..sim.fauna import BY_KEY
+            c = {k: v for k, v in self.animals.counts().items() if v}
+            lines.append("Zvířata: " + (", ".join(f"{BY_KEY[k].name} {v}" for k, v in c.items()) or "žádná"))
         if self.hydro is not None:
             lines.append(f"Řeky: {int((self.hydro.river > 0).sum())} buněk · jezera: {int((self.hydro.lake > 0).sum())}")
         return lines

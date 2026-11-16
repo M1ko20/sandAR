@@ -64,6 +64,8 @@ class SimulatedSensor(DepthSensor):
         self._static = np.where(outer, self.WALL_HEIGHT, self.FLOOR_HEIGHT).astype(np.float32)
         self.sand = np.zeros((self._ny, self._nx), np.float32)
         self._composite = self._static.copy()
+        self._hands: list[tuple[float, float, float]] = []
+        self._arms = np.full((self._ny, self._nx), -1.0, np.float32)
         self.randomize()
 
         rays = self.intrinsics.rays().reshape(-1, 3).astype(np.float64)
@@ -98,6 +100,36 @@ class SimulatedSensor(DepthSensor):
         lo, hi = self.SAND_LIMITS
         np.clip(self.sand, lo, hi, out=self.sand)
         self._composite = np.where(self._inside, self.sand, self._static).astype(np.float32)
+        if self._hands:
+            np.maximum(self._composite, self._arms, out=self._composite)
+
+    # --- virtuální ruce ------------------------------------------------------
+    def set_hands(self, hands: list[tuple[float, float, float]]) -> None:
+        """Ruce nad pískem: dlaně (x, y, výška nad pískem) [m]. Paže vede od nejbližší stěny ven z bedny,
+        jako u skutečného návštěvníka (pro vývoj a testy detekce rukou)."""
+        W, D = self.BOX_SIZE
+        arms = np.full_like(self._arms, -1.0)
+        for px, py, ph in hands:
+            ground = float(self.true_height(np.array(px), np.array(py)))
+            pz = ground + ph
+            # nejbližší stěna -> rameno 35 cm za ní ve výšce 30 cm nad okrajem
+            d = [px, W - px, py, D - py]
+            k = int(np.argmin(d))
+            ex, ey = [(-0.35, py), (W + 0.35, py), (px, -0.35), (px, D + 0.35)][k]
+            ez = self.WALL_HEIGHT + 0.30
+            sx, sy = px - ex, py - ey
+            L2 = sx * sx + sy * sy
+            t = np.clip(((self._gx - ex) * sx + (self._gy - ey) * sy) / L2, 0, 1)
+            dist = np.hypot(self._gx - (ex + t * sx), self._gy - (ey + t * sy))
+            r = 0.045
+            top = ez + t * (pz - ez) + np.sqrt(np.clip(r * r - dist * dist, 0, None))
+            arms = np.where(dist < r, np.maximum(arms, top), arms)
+            palm = np.hypot(self._gx - px, self._gy - py) < 0.055
+            arms = np.where(palm, np.maximum(arms, pz + 0.02), arms)
+        with self._lock:
+            self._hands = list(hands)
+            self._arms = arms.astype(np.float32)
+            self._rebuild()
 
     def true_height(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
         """Skutečná výška písku v souřadnicích bedny (pro testy přesnosti)."""
@@ -161,7 +193,7 @@ class SimulatedSensor(DepthSensor):
         bad = np.flatnonzero(np.abs(self._sample(C[0] + t * d[:, 0], C[1] + t * d[:, 1], composite) - h) > 0.002)
         if len(bad):
             db = d[bad]
-            lo = (self.SAND_LIMITS[1] + 0.05 - C[2]) / db[:, 2]  # nad nejvyšším bodem
+            lo = (max(self.SAND_LIMITS[1], float(composite.max())) + 0.05 - C[2]) / db[:, 2]  # nad nejvyšším bodem
             hi = (self.FLOOR_HEIGHT - 0.01 - C[2]) / db[:, 2]  # pod stolem
             for _ in range(16):
                 mid = 0.5 * (lo + hi)

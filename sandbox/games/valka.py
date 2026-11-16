@@ -65,7 +65,7 @@ class WaterWarGame(Game):
     title = "Vodní válka"
     description = "Dva hráči: uprostřed vyvěrá voda. Stav hráze k sobě, kopej koryta k soupeři. Kdo vydrží déle?"
     order = 94
-    category = "soutěž"
+    category = "dva hráči"
     intro = "Uprostřed vyvěrá voda! Stav hráze ke své vesnici a kopej koryta k soupeři."
     keys = [("Enter", "pustit vodu hned / další kolo"), ("↑ / ↓", "síla pramene"), ("Backspace", "nové kolo")]
 

@@ -4,7 +4,8 @@ Kroky pro každý snímek:
 
 1. pixely -> 3D body -> (x, y, h) v souřadnicích bedny (přesná perspektiva Kinectu),
 2. rozprostření do mřížky (průměr bodů v buňce),
-3. vyřazení rukou/předmětů (příliš vysoko nad pískem),
+3. vyřazení rukou: pixely, které detektor rukou (``hands.py``) označí jako paži/ruku, se do
+   výšky vůbec nezapočítají – písek pod rukou zůstane, jak byl,
 4. časový filtr: malé změny = šum. Ty se berou z klouzavého okna posledních N snímků
    (průměr bez nejvyšší a nejnižší hodnoty) a změny pod ``hysteresis`` se ignorují,
    aby se vrstevnice na klidném písku nechvěly. Velké změny se přijmou až když
@@ -20,8 +21,9 @@ import time
 import cv2
 import numpy as np
 
-from ..config import TerrainSettings
+from ..config import HandSettings, TerrainSettings
 from .calibration import KinectCalibration
+from .hands import Hand, HandDetector
 from .heightmap import HeightMap
 
 
@@ -63,9 +65,14 @@ def _replicate_edges(a: np.ndarray, ex: int, ey: int) -> None:
 
 
 class TerrainProcessor:
-    def __init__(self, calibration: KinectCalibration, settings: TerrainSettings) -> None:
+    def __init__(self, calibration: KinectCalibration, settings: TerrainSettings,
+                 hand_settings: HandSettings | None = None,
+                 outer: tuple[float, float, float, float] | None = None) -> None:
         self.cal = calibration
         self.s = settings
+        hs = hand_settings if hand_settings is not None else HandSettings()
+        self.hand_detector = HandDetector(calibration, hs, outer) if hs.enabled else None
+        self._last_t: float | None = None
         W, D = calibration.size
         self.size = (W, D)
         self.gw = int(settings.grid_width)
@@ -105,6 +112,8 @@ class TerrainProcessor:
     def reset(self) -> None:
         self.state = None
         self._buf = None
+        if self.hand_detector is not None:
+            self.hand_detector.reset()
 
     def _window_filter(self, meas: np.ndarray, use: np.ndarray) -> np.ndarray:
         """Klouzavý průměr posledních N měření buňky bez nejvyšší a nejnižší hodnoty.
@@ -124,10 +133,16 @@ class TerrainProcessor:
         return (buf.sum(axis=0) - buf.max(axis=0) - buf.min(axis=0)) / (n - 2)
 
     # ------------------------------------------------------------------------
-    def measure(self, depth: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Jeden snímek -> (průměrná výška v buňce, platnost, maska 'ruka nad pískem')."""
+    def measure(self, depth: np.ndarray, hand_px: np.ndarray | None = None
+                ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Jeden snímek -> (průměrná výška v buňce, platnost, maska buněk s rukou).
+
+        ``hand_px`` = pixely ruky (z detektoru): do výšky písku se nepočítají, jen do masky rukou."""
         z = depth.reshape(-1)[self.pixel_index]
         ok = z > 0
+        hand = None
+        if hand_px is not None:
+            hand = hand_px.reshape(-1)[self.pixel_index][ok]
         z = z[ok]
         h = z * self._rn[ok] + self.cal.offset
         a = z * self._ra[ok] - self._oa
@@ -146,19 +161,31 @@ class TerrainProcessor:
 
         n = self.gw * self.gh
         sand = (h >= self.s.min_height) & (h <= self.s.max_height)
+        if hand is not None:
+            hand = hand[inside]
+            high = np.bincount(cell[hand], minlength=n)
+            sand &= ~hand
+        else:
+            high = np.bincount(cell[h > self.s.max_height], minlength=n)
         counts = np.bincount(cell[sand], minlength=n)
         sums = np.bincount(cell[sand], weights=h[sand], minlength=n)
-        high = np.bincount(cell[h > self.s.max_height], minlength=n)
 
         valid = counts > 0
         mean = np.zeros(n, np.float32)
         mean[valid] = sums[valid] / counts[valid]
         shape = (self.gh, self.gw)
-        return mean.reshape(shape), valid.reshape(shape), (high >= 2).reshape(shape)
+        return mean.reshape(shape), valid.reshape(shape), (high >= (1 if hand is not None else 2)).reshape(shape)
 
-    def process(self, depth: np.ndarray, seq: int = 0) -> HeightMap:
+    def process(self, depth: np.ndarray, seq: int = 0, timestamp: float | None = None) -> HeightMap:
         t0 = time.perf_counter()
-        meas, valid, high = self.measure(depth)
+        now = time.monotonic() if timestamp is None else timestamp
+        dt = 1 / 30 if self._last_t is None else float(np.clip(now - self._last_t, 1e-3, 0.5))
+        self._last_t = now
+        hand_list: list[Hand] = []
+        hand_px = None
+        if self.hand_detector is not None:
+            hand_list, hand_px = self.hand_detector.process(depth, dt, self.state)
+        meas, valid, high = self.measure(depth, hand_px)
         self.last_coverage = float(valid.mean())
         s = self.s
 
@@ -201,13 +228,17 @@ class TerrainProcessor:
             self._buf[:, commit] = cand[commit]  # okno začne od nové výšky
 
         _replicate_edges(state, ex, ey)
-        hands = high | (valid & (meas - state > s.hand_margin) & ~commit)
+        if self.hand_detector is not None:
+            hands = high
+        else:  # bez detektoru: ruka = co je vysoko nebo náhle vystoupí nad písek
+            hands = high | (valid & (meas - state > s.hand_margin) & ~commit)
         if hands.any():
             hands = cv2.dilate(hands.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
+        points = [h.pos for h in hand_list] if self.hand_detector is not None else self.hand_points(hands)
 
         out = cv2.GaussianBlur(state, (0, 0), s.spatial_sigma) if s.spatial_sigma > 0 else state.copy()
         self.last_ms = (time.perf_counter() - t0) * 1000
-        return HeightMap(out, self.size, hands, hand_points=self.hand_points(hands), seq=seq,
+        return HeightMap(out, self.size, hands, hand_points=points, hand_list=hand_list, seq=seq,
                          timestamp=time.monotonic())
 
     def hand_points(self, hands: np.ndarray, min_cells: int = 12) -> list[tuple[float, float]]:

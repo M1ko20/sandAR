@@ -1,0 +1,11 @@
+{
+  "name": "Propast Macocha",
+  "note": "138 m hluboká propast v Moravském krasu.",
+  "lat": 49.3733,
+  "lon": 16.729,
+  "width_m": 1500,
+  "height_m": 900.0,
+  "min_m": 342.5570983886719,
+  "max_m": 514.948486328125,
+  "source": "© ČÚZK – Ortofoto ČR, DMR 5G (CC BY 4.0)"
+}

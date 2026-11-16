@@ -65,7 +65,7 @@ def run(game, hm, seconds, dt=1 / 30, until=None):
 
 def test_new_games_are_discovered_after_existing_ones():
     ids = [g.id for g in discover_games()]
-    assert ids[:5] == ["topo", "mapa", "vyska", "predloha", "voda"]
+    assert ids[:5] == ["topo", "mapa", "vyska", "krajina", "voda"]
     assert ids[-4:] == ["valka", "kral", "potopa", "modeluj"]
     assert len(ids) <= 19  # všechny mají klávesu (1–9, 0, Shift+1–9)
 

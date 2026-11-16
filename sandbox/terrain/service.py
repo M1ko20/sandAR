@@ -13,7 +13,7 @@ import time
 
 import numpy as np
 
-from ..config import TerrainSettings
+from ..config import HandSettings, TerrainSettings
 from ..sensor.base import DepthFrame, DepthSensor
 from .calibration import KinectCalibration
 from .heightmap import HeightMap
@@ -24,9 +24,11 @@ log = logging.getLogger(__name__)
 
 class TerrainService:
     def __init__(self, sensor: DepthSensor, settings: TerrainSettings,
-                 calibration: KinectCalibration | None = None) -> None:
+                 calibration: KinectCalibration | None = None, hand_settings: HandSettings | None = None,
+                 outer: tuple[float, float, float, float] | None = None) -> None:
         self.sensor = sensor
         self.settings = settings
+        self.hand_settings = hand_settings
         self._lock = threading.Lock()
         self._processor: TerrainProcessor | None = None
         self._heightmap: HeightMap | None = None
@@ -35,7 +37,7 @@ class TerrainService:
         self.sensor_fps = 0.0
         self._capture: dict | None = None
         self._running = True
-        self.set_calibration(calibration)
+        self.set_calibration(calibration, outer)
         self._thread = threading.Thread(target=self._loop, name="terrain", daemon=True)
         self._thread.start()
 
@@ -49,9 +51,12 @@ class TerrainService:
     def processor(self) -> TerrainProcessor | None:
         return self._processor
 
-    def set_calibration(self, calibration: KinectCalibration | None) -> None:
+    def set_calibration(self, calibration: KinectCalibration | None,
+                        outer: tuple[float, float, float, float] | None = None) -> None:
+        """``outer`` = obdélník celé bedny (stěny) v souřadnicích ``calibration`` – pro detekci rukou."""
         with self._lock:
-            self._processor = TerrainProcessor(calibration, self.settings) if calibration else None
+            self._processor = (TerrainProcessor(calibration, self.settings, self.hand_settings, outer)
+                               if calibration else None)
             self._heightmap = None
 
     def latest_heightmap(self) -> HeightMap | None:
@@ -109,7 +114,7 @@ class TerrainService:
             if processor is None or self.frozen:
                 continue
             try:
-                hm = processor.process(frame.depth, frame.seq)
+                hm = processor.process(frame.depth, frame.seq, frame.timestamp)
             except Exception:
                 log.exception("Chyba při zpracování terénu")
                 continue

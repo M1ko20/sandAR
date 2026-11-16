@@ -70,7 +70,7 @@ class IslandFloodGame(Game):
     title = "Potopa ostrovů"
     description = "Dva hráči: hladina moře stoupá, udrž svůj ostrov nad vodou. Vyhrává poslední ostrov."
     order = 96
-    category = "soutěž"
+    category = "dva hráči"
     intro = "Moře bude stoupat! Postav si ve své půlce ostrov a udrž ho nad vodou."
     keys = [("Enter / mezerník", "začít / další kolo"), ("↑ / ↓", "rychlost stoupání moře")]
 
@@ -120,7 +120,7 @@ class IslandFloodGame(Game):
     def update(self, hm, dt: float) -> None:
         self.clock += dt
         self.state_t += dt
-        hands = hm.hands is not None and int(hm.hands.sum()) > 12
+        hands = hm.has_hands
         self.hand_time = self.hand_time + dt if hands else 0.0
         zones = self.zones(hm)
         self.peaks = [vs.zone_peak(hm.heights, hm.hands, z) for z in zones]

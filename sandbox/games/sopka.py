@@ -6,16 +6,24 @@ simulace ``sandbox.sim.lava``), chladne z bílé přes oranžovou a tmavě červ
 až v černou krustu s žhnoucími puklinami a zastaví se.
 
 Cyklus běží sám: klid → probouzení → erupce → chladnutí → (vyblednutí) → klid.
+
+Pod sopkou stojí vesnice (v údolích, kam by láva opravdu tekla). Dům, ke kterému láva
+doteče, shoří. Návštěvníci mají během probouzení a erupce čas postavit hráze nebo vykopat
+koryto, které lávu odvede – na konci se ukáže, kolik vesnic zachránili.
 """
 
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 import numpy as np
 
+from ..render import hud
+from ..sim.ecosystem import House
 from ..sim.lava import LavaSim, blur3, downsample
 from .base import Game
+from .mesto import draw_house
 
 FRAG = """
 uniform sampler2D u_lava;
@@ -148,6 +156,62 @@ def find_vent(heights: np.ndarray, hands: np.ndarray | None = None, near: tuple[
     return iy, ix, float(s[iy, ix] - np.median(s))
 
 
+VILLAGE_NAMES = ["Popelov", "Žhavice", "Horní Lhota", "Dolany", "Kamenice", "Pod Sopkou", "Teplá", "Lávka"]
+
+
+@dataclass
+class Village:
+    name: str
+    x: float
+    y: float
+    houses: list[House]
+
+    @property
+    def burned(self) -> bool:
+        return any(h.flooded for h in self.houses)
+
+
+def place_villages(heights: np.ndarray, size: tuple[float, float], vent: tuple[float, float],
+                   rng: np.random.Generator, n: int = 4, min_gap: float = 0.2) -> list[tuple[float, float]]:
+    """Místa pro vesnice: rovinatá, níž než kráter, v dosahu lávy (20–60 cm od kráteru),
+    pokud možno v údolích po spádu. Navzájem aspoň ``min_gap`` od sebe, ne u stěn."""
+    gh, gw = heights.shape
+    W, D = size
+    f = max(1, gw // 64)
+    coarse = downsample(heights, f)
+    ch, cw = coarse.shape
+    cx, cy = W / cw, D / ch
+    gx, gy = np.meshgrid((np.arange(cw) + 0.5) * cx, (np.arange(ch) + 0.5) * cy)
+    gyy, gxx = np.gradient(coarse, cy, cx)
+    slope = np.hypot(gxx, gyy)
+    d = np.hypot(gx - vent[0], gy - vent[1])
+    vent_h = float(coarse[min(ch - 1, int(vent[1] / cy)), min(cw - 1, int(vent[0] / cx))])
+    mx, my = 0.10, 0.17  # nahoře a dole jsou texty pro návštěvníky
+    ok = (gx > mx) & (gx < W - mx) & (gy > my) & (gy < D - my) & (d > 0.2) & (d < 0.65)
+    # nízko (údolí) a rovně je lepší, kousek náhody ať to není pokaždé stejné
+    cost = (coarse - vent_h) / 0.03 + slope / 0.15 + np.abs(d - 0.35) / 0.15 + rng.random(coarse.shape) * 1.2
+    cost = np.where(ok, cost, np.inf)
+    out: list[tuple[float, float]] = []
+    for _ in range(n):
+        if not np.isfinite(cost).any():
+            break
+        k = int(np.argmin(cost))
+        px, py = float(gx.flat[k]), float(gy.flat[k])
+        out.append((px, py))
+        cost[np.hypot(gx - px, gy - py) < min_gap] = np.inf
+    return out
+
+
+def build_village(name: str, x: float, y: float, rng: np.random.Generator, n_houses: int = 4) -> Village:
+    houses = []
+    for i in range(n_houses):
+        ang = i / max(1, n_houses - 1) * 2 * math.pi + rng.uniform(-0.3, 0.3)
+        r = 0.0 if i == 0 else rng.uniform(0.045, 0.055)
+        houses.append(House(x + r * math.cos(ang), y + r * math.sin(ang), rng.uniform(0, math.pi), 0.034, 0.022,
+                            church=(i == 0)))
+    return Village(name, x, y, houses)
+
+
 class Particles:
     """Jednoduché částice (kouř, žhavé úlomky) v metrech bedny."""
 
@@ -206,14 +270,15 @@ def disc_triangles(centers: np.ndarray, radii: np.ndarray, colors: np.ndarray, s
 class VolcanoGame(Game):
     id = "sopka"
     title = "Živá sopka"
-    description = "Postav sopku z písku. Z nejvyššího vrcholu vyteče žhavá láva a stéká po svazích dolů."
-    order = 70
+    description = "Postav sopku z písku. Z vrcholu vyteče žhavá láva – ochraň vesnice pod sopkou hrázemi."
+    order = 60
     category = "zážitek"
-    intro = "Postav vysoký kopec – sopku – a podrž nad ním ruku: probudí se a vyteče z ní láva!"
+    intro = "Postav sopku a podrž nad ní ruku – probudí se! Pak hrázemi z písku ochraň vesnice pod ní."
     keys = [
         ("ruka", "ruka nad vrcholem probudí sopku"),
         ("E", "erupce hned"),
-        ("C", "automatický cyklus zap/vyp"),
+        ("A", "automatický cyklus zap/vyp"),
+        ("V", "vesnice zap/vyp"),
         ("X", "smazat lávu"),
         ("↑ / ↓", "síla erupce"),
     ]
@@ -234,6 +299,11 @@ class VolcanoGame(Game):
         self.hand_time = 0.0
         self.eruptions = 0
         self.fade = 1.0
+        self.show_villages = getattr(self, "show_villages", True)
+        self.villages: list[Village] = []
+        self._place_pending = True
+        self.saved_last: tuple[int, int] | None = None
+        self.clock = 0.0
         self._set_phase(CALM, FIRST_CALM)
 
     def stop(self) -> None:
@@ -249,6 +319,9 @@ class VolcanoGame(Game):
         self.particles.clear()
         self.fade = 1.0
         self.hand_time = 0.0
+        self.villages = []
+        self._place_pending = True
+        self.saved_last = None
         self._set_phase(CALM, FIRST_CALM)
 
     # --- fáze ------------------------------------------------------------------------
@@ -262,11 +335,26 @@ class VolcanoGame(Game):
             self.fade = 1.0
         if phase == ERUPT:
             self.eruptions += 1
+        if phase == FADE and self.villages:  # konec erupce: kolik vesnic přežilo
+            self.saved_last = (sum(not v.burned for v in self.villages), len(self.villages))
+        if phase == CALM:
+            self._place_pending = True  # nový cyklus = nové vesnice (terén se mezitím změnil)
 
     def _wake(self, hm, near_m: tuple[float, float] | None = None) -> None:
         """Probudí sopku: zvolí kráter a přejde do fáze probouzení."""
         self._choose_vent(hm, near_m)
         self._set_phase(RUMBLE)
+        self._place_villages(hm)
+
+    def _place_villages(self, hm) -> None:
+        self._place_pending = False
+        self.saved_last = None
+        if not self.show_villages:
+            self.villages = []
+            return
+        spots = place_villages(hm.heights, hm.size, self.vent_m, self.rng)
+        names = list(self.rng.permutation(VILLAGE_NAMES))
+        self.villages = [build_village(names[i], x, y, self.rng) for i, (x, y) in enumerate(spots)]
 
     def _choose_vent(self, hm, near_m: tuple[float, float] | None = None) -> None:
         gh, gw = hm.shape
@@ -302,9 +390,12 @@ class VolcanoGame(Game):
         assert self.rough is not None
 
         self.phase_t += dt
+        self.clock += dt
         self._hand_trigger(hm, dt)
         if self.phase == CALM and self.phase_t < 0.05:
             self._choose_vent(hm)
+        if self._place_pending and self.phase == CALM and self.phase_t > 0.5:
+            self._place_villages(hm)  # v klidu podle aktuálního terénu, ať je vidět, co chránit
         if self.phase_t >= self.phase_len:
             if self.phase == CALM:
                 if self.auto:
@@ -329,9 +420,27 @@ class VolcanoGame(Game):
             terrain = downsample(hm.heights, DS)[: shape[0], : shape[1]] + self.rough
             sim.advance(terrain, dt)
         self._particles(dt)
+        self._burn_houses(hm)
         assert self.tex_lava is not None and self.tex_temp is not None
         self.tex_lava.write(sim.thickness.tobytes())
         self.tex_temp.write(sim.temp.tobytes())
+
+    def _burn_houses(self, hm) -> None:
+        """Dům, pod kterým je horká láva, shoří."""
+        sim = self.sim
+        if sim is None or not self.villages or self.phase in (CALM, FADE):
+            return
+        sh, sw = sim.shape
+        W, D = hm.size
+        for v in self.villages:
+            for h in v.houses:
+                if h.flooded:
+                    continue
+                iy = min(sh - 1, max(0, int(h.y / D * sh)))
+                ix = min(sw - 1, max(0, int(h.x / W * sw)))
+                win = (slice(max(0, iy - 1), iy + 2), slice(max(0, ix - 1), ix + 2))
+                if (sim.thickness[win] > 0.0012).any() and (sim.temp[win] > sim.solid).any():
+                    h.flooded, h.flooded_at = True, self.clock
 
     def _hand_trigger(self, hm, dt: float) -> None:
         """Ruka podržená nad kopcem (do 25 cm) v klidu sopku probudí."""
@@ -391,8 +500,23 @@ class VolcanoGame(Game):
         self.host.draw_fullscreen(self.prog, u_lava=(self.tex_lava, 1), u_temp=(self.tex_temp, 2),
                                   u_vent=(self.vent_m[0] / bw, self.vent_m[1] / bh), u_glow=float(self._glow()),
                                   u_solid=float(self.sim.solid), u_fade=float(self.fade))
+        self._draw_villages()
         self._draw_particles()
         self._labels()
+
+    def _draw_villages(self) -> None:
+        if not self.villages:
+            return
+        p = self.host.painter
+        canvas = self.host.canvas_size
+        sx, sy = canvas[0] / self.host.box_size[0], canvas[1] / self.host.box_size[1]
+        sz = hud.size(canvas, 0.62)
+        for v in self.villages:
+            for h in v.houses:
+                draw_house(p, h, sx, sy, self.clock, damage="fire")
+            color = (1.0, 0.55, 0.4, 1) if v.burned else (1, 1, 1, 1)
+            hud.label(p, v.name, v.x * sx, v.y * sy + 0.06 * sy, sz, color=color, anchor="tc",
+                      bg=(0, 0, 0, 0.45))
 
     def _draw_particles(self) -> None:
         p = self.particles
@@ -419,41 +543,49 @@ class VolcanoGame(Game):
 
     def _labels(self) -> None:
         p = self.host.painter
-        cw, ch = self.host.canvas_size
-        size = max(18, ch // 22)
-        small = max(16, ch // 28)
+        canvas = self.host.canvas_size
+        cw, ch = canvas
+        size = hud.size(canvas)
+        small = hud.size(canvas, 0.8)
         remaining = max(0.0, self.phase_len - self.phase_t)
         top = None
         bottom = None
-        color = (1.0, 0.85, 0.3, 1)
+        color = hud.YELLOW
+        n_v = len(self.villages)
+        safe = sum(not v.burned for v in self.villages)
         if self.phase == CALM:
-            if self.vent_height < 0.02:
-                top = "Postav z písku vysokou sopku!"
-            else:
-                top = "Sopka spí…"
+            top = "Postav z písku vysokou sopku!" if self.vent_height < 0.02 else "Sopka spí…"
+            color = hud.WHITE
+            if self.saved_last is not None and self.phase_t < 8.0:
+                s_, n_ = self.saved_last
+                top = f"Zachránili jste {s_} z {n_} vesnic!" if s_ else "Láva zničila všechny vesnice…"
+                color = hud.GREEN if s_ == n_ else hud.YELLOW
             if self.auto:
                 bottom = f"Podrž ruku nad vrcholem – nebo počkej {remaining:.0f} s"
             else:
                 bottom = "Podrž ruku nad vrcholem a sopka se probudí"
-            color = (1, 1, 1, 1)
         elif self.phase == RUMBLE:
-            top = "Sopka se probouzí…"
+            top = "Sopka se probouzí – rychle postav hráze!" if n_v else "Sopka se probouzí…"
             color = (1.0, 0.55, 0.15, 1)
         elif self.phase == ERUPT:
             if self.phase_t < 3.0:
                 top = "ERUPCE!"
                 color = (1.0, 0.35, 0.1, 1) if int(self.phase_t * 4) % 2 else (1.0, 0.9, 0.3, 1)
-                size = int(size * 1.5)
+                size = int(size * 1.4)
             else:
                 top = "Láva teče z kopce dolů"
-            bottom = "Rukama můžeš lávě postavit hráz nebo vykopat koryto"
+            bottom = "Hrází z písku nebo korytem odveď lávu od vesnic" if n_v else \
+                "Rukama můžeš lávě postavit hráz nebo vykopat koryto"
         elif self.phase == COOL:
             top = "Láva chladne a tuhne na černý kámen"
             color = (1.0, 0.6, 0.3, 1)
         if top:
-            p.text(top, cw / 2, size * 0.5, size=size, anchor="tc", bold=True, color=color, outline=4)
+            hud.label(p, top, cw / 2, size * 0.25, size, anchor="tc", color=color)
         if bottom:
-            p.text(bottom, cw / 2, ch - small * 0.5, size=small, anchor="bc", color=(1, 1, 1, 1), outline=3)
+            hud.label(p, bottom, cw / 2, ch - small * 0.3, small, anchor="bc")
+        if n_v and self.phase in (RUMBLE, ERUPT, COOL):  # pod hlavním nápisem, ať se nepřekrývají
+            hud.label(p, f"Vesnice v bezpečí: {safe} z {n_v}", cw / 2, size * 0.25 + size * 1.75, small,
+                      anchor="tc", color=hud.GREEN if safe == n_v else (1.0, 0.55, 0.4, 1))
 
     # --- ovládání ------------------------------------------------------------------
     def key(self, name: str, shift: bool = False) -> bool:
@@ -464,7 +596,13 @@ class VolcanoGame(Game):
             self.fade = 1.0
             self._set_phase(ERUPT)
             self.host.notify("Erupce!")
-        elif name == "c":
+        elif name == "v":
+            self.show_villages = not self.show_villages
+            hm = self.host.heightmap
+            if hm is not None:
+                self._place_villages(hm)
+            self.host.notify("Vesnice " + ("zapnuty" if self.show_villages else "vypnuty"))
+        elif name == "a":
             self.auto = not self.auto
             self.host.notify("Automatický cyklus " + ("zapnut" if self.auto else "vypnut"))
         elif name in ("x", "backspace"):
@@ -479,7 +617,8 @@ class VolcanoGame(Game):
     def status(self) -> list[str]:
         lines = [f"Fáze: {self.phase} ({max(0.0, self.phase_len - self.phase_t):.0f} s)",
                  f"Kráter: x={self.vent_m[0]:.2f} m, y={self.vent_m[1]:.2f} m, převýšení {self.vent_height * 100:.1f} cm",
-                 f"Automatický cyklus: {'ano' if self.auto else 'ne'} · síla ×{self.power:.2f} · erupcí {self.eruptions}"]
+                 f"Automatický cyklus: {'ano' if self.auto else 'ne'} · síla ×{self.power:.2f} · erupcí {self.eruptions}",
+                 f"Vesnice: {sum(not v.burned for v in self.villages)}/{len(self.villages)} v bezpečí"]
         if self.sim is not None:
             cell = self.sim.cell
             lines.append(f"Láva: {self.sim.volume * 1000:.2f} l, tekutá plocha "
