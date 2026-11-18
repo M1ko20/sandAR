@@ -126,11 +126,27 @@ vec2 contours(float h) {
     return vec2(minor, major);
 }
 
+// Prohlubeň vůči okolí (~2,5 cm): kladné = údolí/dolík, záporné = hřbet. Na „ambient occlusion“.
+float cavity(vec2 uv) {
+    vec2 r = 0.025 / u_box;
+    float h = height_at(uv);
+    float m = 0.0;
+    for (int i = 0; i < 8; ++i) {
+        float a = float(i) * 0.785398;
+        m += texture(u_height, uv + vec2(cos(a), sin(a)) * r).r;
+    }
+    return m / 8.0 - h;
+}
+
+// Stínování reliéfu 0..1: hlavní světlo z levého horního rohu, slabé protisvětlo (stíny nejsou
+// černé) a zastínění v údolích – terén z písku pak působí plasticky i na zrnité drti.
 float hillshade(vec2 uv, float exaggeration) {
     vec2 g = height_grad(uv) * exaggeration;
     vec3 n = normalize(vec3(-g.x, -g.y, 1.0));
-    vec3 l = normalize(vec3(-1.0, -1.2, 1.6));
-    return clamp(dot(n, l), 0.0, 1.0);
+    float key = clamp(dot(n, normalize(vec3(-1.0, -1.2, 1.6))), 0.0, 1.0);
+    float fill = clamp(dot(n, normalize(vec3(1.0, 0.8, 1.2))), 0.0, 1.0);
+    float ao = 1.0 - clamp(cavity(uv) / 0.012, 0.0, 1.0) * 0.35 + clamp(-cavity(uv) / 0.012, 0.0, 1.0) * 0.08;
+    return clamp((0.82 * key + 0.18 * fill) * ao * 1.04, 0.0, 1.0);
 }
 
 // Turbo-like barevná škála pro výškovou mapu

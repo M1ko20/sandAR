@@ -508,6 +508,7 @@ class VolcanoGame(Game):
                                   u_solid=float(self.sim.solid), u_fade=float(self.fade))
         self._draw_villages()
         self._draw_particles()
+        self.host.glow(1.0, 0.5)
         self._draw_marker()
         self._labels()
 
