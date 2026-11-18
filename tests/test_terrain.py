@@ -70,21 +70,57 @@ def test_processor_reconstructs_terrain(sim):
 
 
 def test_processor_ignores_passing_hand(sim):
+    """Skutečná paže (vede přes stěnu bedny) je ruka a do terénu se nepropíše ani když chvíli leží."""
     normal, offset, corners = sim.ground_truth()
     cal = KinectCalibration.from_plane(sim.intrinsics, normal, offset, corners)
     sim.flatten()
     proc = TerrainProcessor(cal, TerrainSettings(grid_width=128))
-    flat = sim.render_depth(noise=False)
-    proc.process(flat)
-    hand = flat.copy()
-    hand[150:260, 200:300] -= 0.10  # ruka 10 cm nad pískem
-    for _ in range(4):  # krátký průjezd rukou
-        hm = proc.process(hand)
-    assert np.abs(hm.heights).max() < 0.01
+    for i in range(5):
+        proc.process(sim.render_depth(), i, i / 30)
+    sim.set_hands([(0.5, 0.4, 0.03)])  # dlaň těsně nad pískem
+    for i in range(5, 65):  # 2 s
+        hm = proc.process(sim.render_depth(), i, i / 30)
+    assert np.abs(hm.heights).max() < 0.005
     assert hm.hands is not None and hm.hands.any()
-    for _ in range(30):  # ruka zmizí
-        hm = proc.process(flat)
-    assert not hm.hands.any()
+    assert len(hm.hand_list) == 1
+    hand = hm.hand_list[0]
+    assert abs(hand.x - 0.5) < 0.04 and abs(hand.y - 0.4) < 0.04
+    sim.set_hands([])
+    for i in range(65, 80):
+        hm = proc.process(sim.render_depth(), i, i / 30)
+    assert not hm.hands.any() and hm.hand_list == []
+    assert np.abs(hm.heights).max() < 0.005
+
+
+def test_floating_object_is_not_a_hand_and_new_hill_is_terrain(sim):
+    """Co se nedotýká okraje bedny (nová hromádka), není ruka – a do terénu se dostane."""
+    normal, offset, corners = sim.ground_truth()
+    cal = KinectCalibration.from_plane(sim.intrinsics, normal, offset, corners)
+    sim.flatten()
+    proc = TerrainProcessor(cal, TerrainSettings(grid_width=128))
+    for i in range(5):
+        proc.process(sim.render_depth(), i, i / 30)
+    sim.set_sand(lambda x, y: 0.06 * np.exp(-((x - 0.5) ** 2 + (y - 0.4) ** 2) / 0.005))
+    for i in range(5, 60):
+        hm = proc.process(sim.render_depth(), i, i / 30)
+    assert hm.hand_list == []
+    assert hm.sample(0.5, 0.4) > 0.045
+
+
+def test_two_hands_from_opposite_sides(sim):
+    normal, offset, corners = sim.ground_truth()
+    cal = KinectCalibration.from_plane(sim.intrinsics, normal, offset, corners)
+    sim.flatten()
+    proc = TerrainProcessor(cal, TerrainSettings(grid_width=128))
+    for i in range(5):
+        proc.process(sim.render_depth(), i, i / 30)
+    sim.set_hands([(0.25, 0.35, 0.10), (0.8, 0.45, 0.06)])
+    for i in range(5, 20):
+        hm = proc.process(sim.render_depth(), i, i / 30)
+    pts = sorted((round(h.x, 2), round(h.y, 2)) for h in hm.hand_list)
+    assert len(pts) == 2, pts
+    assert abs(pts[0][0] - 0.25) < 0.04 and abs(pts[1][0] - 0.8) < 0.04
+    assert len({h.id for h in hm.hand_list}) == 2
 
 
 def test_processor_accepts_lasting_change(sim):
@@ -205,3 +241,23 @@ def test_window_filter_does_not_leak_passing_hand(sim):
     for _ in range(20):
         hm = proc.process(sim.render_depth(noise=True))
     assert np.abs(hm.heights[8:-8, 8:-8]).max() < 0.004
+
+
+def test_raised_hand_flag_has_hysteresis():
+    """Zvednutá ruka (déšť apod.) až od ~25 cm; při modelování v písku (do ~10 cm) ani těsně nad ním ne."""
+    from sandbox.config import HandSettings
+    from sandbox.terrain.hands import HandTracker, _Detection
+
+    s = HandSettings()
+    tr = HandTracker(s)
+    def hold(h, frames=8):
+        for _ in range(frames):
+            hands = tr.update([_Detection(0.5, 0.4, 0.55, 0.4, h, 100)], 1 / 30)
+        return hands[0].raised
+
+    assert not hold(0.08)  # modelování v písku
+    assert not hold(0.18)  # ruka nad pískem, ale ne zvednutá
+    assert hold(0.32)  # zvednutá
+    assert hold(0.22)  # mírně klesla – pořád zvednutá (hystereze)
+    assert not hold(0.05)
+    assert not hold(0.22)  # zespodu na 22 cm ještě ne

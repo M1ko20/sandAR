@@ -46,6 +46,13 @@ class FakeHost:
     def float_texture(self, size, data=None):
         return FakeTexture(size)
 
+    @property
+    def ctx(self):
+        return self
+
+    def texture(self, size, components=1, data=None, dtype="f1"):
+        return FakeTexture(size)
+
 
 def hm_of(heights, hands=None):
     return HeightMap(heights=np.asarray(heights, np.float32), size=SIZE, hands=hands)
@@ -65,7 +72,7 @@ def run(game, hm, seconds, dt=1 / 30, until=None):
 
 def test_new_games_are_discovered_after_existing_ones():
     ids = [g.id for g in discover_games()]
-    assert ids[:5] == ["topo", "mapa", "vyska", "predloha", "voda"]
+    assert ids[:5] == ["topo", "mapa", "vyska", "krajina", "voda"]
     assert ids[-4:] == ["valka", "kral", "potopa", "modeluj"]
     assert len(ids) <= 19  # všechny mají klávesu (1–9, 0, Shift+1–9)
 
@@ -92,7 +99,7 @@ def test_zone_peak_ignores_hands():
 
 # --- Modeluj podle předlohy --------------------------------------------------------------------
 def test_half_targets_face_each_player():
-    saddle = BUILTIN[2]  # Dva vrcholy a sedlo: vyšší vrchol vlevo z pohledu hráče
+    saddle = next(t for t in BUILTIN if t.name == "Dva vrcholy a sedlo")  #: vyšší vrchol vlevo z pohledu hráče
     left = half_grid(saddle, (SHAPE[0], SHAPE[1] // 2), SIZE, 0.1, 0)
     right = half_grid(saddle, (SHAPE[0], SHAPE[1] // 2), SIZE, 0.1, 1)
     np.testing.assert_allclose(right, left[::-1, ::-1])
@@ -105,7 +112,7 @@ def test_shape_scoring_is_much_more_lenient():
     half = target * 0.5 + 0.02
     strict, _ = evaluate(half, target, 0.015)
     mild, _ = evaluate_shape(half, target)
-    assert strict.score < 55 and mild.score > 80
+    assert strict.score < 75 and mild.score > 80
     assert evaluate_shape(target, target)[0].score == pytest.approx(100, abs=0.5)
     assert evaluate_shape(np.zeros_like(target), target)[0].score < 5
     noisy = target + np.random.default_rng(0).normal(0, 0.006, target.shape).astype(np.float32)

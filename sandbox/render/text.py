@@ -59,6 +59,12 @@ def render_text(text: str, size: int, color=(255, 255, 255, 255), bold: bool = F
     font = get_font(size, bold)
     probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     left, top, right, bottom = probe.multiline_textbbox((0, 0), text, font=font, stroke_width=outline, spacing=size // 4)
+    # Svislý rozměr podle metrik písma, ne podle konkrétních znaků: „Živá“ i „mapa“ pak mají
+    # stejnou výšku a účaří, takže texty vedle sebe a pod sebou lícují.
+    ascent, descent = font.getmetrics() if hasattr(font, "getmetrics") else (size, size // 4)
+    n_lines = text.count("\n") + 1
+    top = min(top, -outline)
+    bottom = max(bottom, ascent + descent + outline + (n_lines - 1) * (ascent + descent + size // 4))
     w, h = max(1, right - left + 2), max(1, bottom - top + 2)
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     ImageDraw.Draw(img).multiline_text((1 - left, 1 - top), text, font=font, fill=tuple(color),

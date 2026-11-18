@@ -159,7 +159,7 @@ def test_hint_words_get_hotter():
 
 def test_games_registered():
     games = {g.id: g for g in discover_games()}
-    assert games["kulicka"].category == "hra" and games["kulicka"].order == 60
-    assert games["poklad"].category == "soutěž" and games["poklad"].order == 65
+    assert games["kulicka"].category == "hra" and games["kulicka"].order == 70
+    assert games["poklad"].category == "soutěž" and games["poklad"].order == 75
     for gid in ("kulicka", "poklad"):
         assert games[gid].intro and games[gid].keys

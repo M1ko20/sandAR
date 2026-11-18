@@ -1,0 +1,11 @@
+{
+  "name": "Pražský hrad a Vltava",
+  "note": "Vltava se vine pod Hradčany a Petřínem.",
+  "lat": 50.088,
+  "lon": 14.3985,
+  "width_m": 3000,
+  "height_m": 1800.0,
+  "min_m": 184.77638244628906,
+  "max_m": 354.9682922363281,
+  "source": "© ČÚZK – Ortofoto ČR, DMR 5G (CC BY 4.0)"
+}

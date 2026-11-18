@@ -42,6 +42,10 @@ class RenderHost:
         self.canvas_texture: moderngl.Texture | None = None
         self.box_size = (1.0, 0.75)
         self.messages: list[tuple[str, float]] = []
+        self._glow: dict[str, Any] | None = None
+        from ..audio import NullAudio
+
+        self.sound = NullAudio()  # aplikace nastaví skutečný výstup (sandbox/audio.py)
 
     # --- plátno a výšky -----------------------------------------------------------
     @property
@@ -128,6 +132,137 @@ class RenderHost:
         assert self.canvas is not None
         self.canvas.use()
         self.canvas.viewport = (0, 0, *self.canvas_size)
+        self.painter.begin(self.canvas_size, screen=False)
+
+    # --- záře (bloom) ------------------------------------------------------------------
+    _GLOW_BRIGHT = """
+#version 330
+in vec2 v_uv;
+out vec4 f_color;
+uniform sampler2D u_src;
+uniform vec2 u_texel;
+uniform float u_threshold;
+void main() {
+    vec3 c = vec3(0.0);
+    for (int y = -1; y <= 1; y += 2)
+        for (int x = -1; x <= 1; x += 2)
+            c += texture(u_src, v_uv + vec2(x, y) * u_texel).rgb;
+    c *= 0.25;
+    float hi = max(c.r, max(c.g, c.b));
+    float sat = hi - min(c.r, min(c.g, c.b));
+    // svítí jen jasné a barevné (láva, oheň, záře) – bílé texty a pěna jen trochu
+    float w = smoothstep(u_threshold, 1.0, hi) * (0.35 + 0.65 * smoothstep(0.15, 0.6, sat));
+    f_color = vec4(c * w, 1.0);
+}
+"""
+    _GLOW_BLUR = """
+#version 330
+in vec2 v_uv;
+out vec4 f_color;
+uniform sampler2D u_src;
+uniform vec2 u_dir;
+void main() {
+    const float W[5] = float[](0.227, 0.194, 0.122, 0.054, 0.016);
+    vec3 c = texture(u_src, v_uv).rgb * W[0];
+    for (int i = 1; i < 5; ++i) {
+        c += texture(u_src, v_uv + u_dir * float(i)).rgb * W[i];
+        c += texture(u_src, v_uv - u_dir * float(i)).rgb * W[i];
+    }
+    f_color = vec4(c, 1.0);
+}
+"""
+    _GLOW_ADD = """
+#version 330
+in vec2 v_uv;
+out vec4 f_color;
+uniform sampler2D u_a;
+uniform sampler2D u_b;
+uniform float u_strength;
+void main() {
+    vec3 g = texture(u_a, v_uv).rgb * 0.6 + texture(u_b, v_uv).rgb * 0.8;
+    f_color = vec4(g * u_strength, 1.0);
+}
+"""
+
+    def glow(self, strength: float = 0.9, threshold: float = 0.55) -> None:
+        """Záře kolem jasných barevných míst plátna (láva, oheň, magie). Volá mód v ``render``
+        po vykreslení scény a PŘED texty (ty pak zůstanou ostré)."""
+        if strength <= 0 or self.canvas_texture is None or self.canvas is None:
+            return
+        cw, ch = self.canvas_size
+        g = self._glow
+        size = (max(8, cw // 4), max(8, ch // 4))
+        if g is None or g["size"] != size:
+            if g is not None:
+                for k in ("ta", "tb", "tc", "td"):
+                    g[k].release()
+                for k in ("fa", "fb", "fc", "fd"):
+                    g[k].release()
+            else:
+                g = {"bright": self.ctx.program(vertex_shader=FULLSCREEN_VS, fragment_shader=self._GLOW_BRIGHT),
+                     "blur": self.ctx.program(vertex_shader=FULLSCREEN_VS, fragment_shader=self._GLOW_BLUR),
+                     "add": self.ctx.program(vertex_shader=FULLSCREEN_VS, fragment_shader=self._GLOW_ADD)}
+            small = (max(4, size[0] // 4), max(4, size[1] // 4))
+            for k, sz in (("ta", size), ("tb", size), ("tc", small), ("td", small)):
+                t = self.ctx.texture(sz, 3, dtype="f2")
+                t.filter = (moderngl.LINEAR, moderngl.LINEAR)
+                t.repeat_x = t.repeat_y = False
+                g[k] = t
+            g["fa"], g["fb"] = self.ctx.framebuffer([g["ta"]]), self.ctx.framebuffer([g["tb"]])
+            g["fc"], g["fd"] = self.ctx.framebuffer([g["tc"]]), self.ctx.framebuffer([g["td"]])
+            g["size"] = size
+            self._glow = g
+
+        def vao(prog):
+            v = self._vaos.get(prog.glo)
+            if v is None:
+                v = self.ctx.vertex_array(prog, [(self._quad, "2f", "in_pos")])
+                self._vaos[prog.glo] = v
+            return v
+
+        self.ctx.disable(moderngl.BLEND)
+        # jasná místa ve 1/4 rozlišení
+        g["fa"].use()
+        self.canvas_texture.use(0)
+        set_uniform(g["bright"], "u_src", 0)
+        set_uniform(g["bright"], "u_texel", (1.0 / cw, 1.0 / ch))
+        set_uniform(g["bright"], "u_threshold", float(threshold))
+        vao(g["bright"]).render(moderngl.TRIANGLE_STRIP)
+
+        def blur(src, dst_fbo, w, h):
+            set_uniform(g["blur"], "u_src", 0)
+            mid = g["tb"] if src is g["ta"] else g["td"]
+            mid_fbo = g["fb"] if src is g["ta"] else g["fd"]
+            mid_fbo.use()
+            src.use(0)
+            set_uniform(g["blur"], "u_dir", (1.0 / w, 0.0))
+            vao(g["blur"]).render(moderngl.TRIANGLE_STRIP)
+            dst_fbo.use()
+            mid.use(0)
+            set_uniform(g["blur"], "u_dir", (0.0, 1.0 / h))
+            vao(g["blur"]).render(moderngl.TRIANGLE_STRIP)
+
+        blur(g["ta"], g["fa"], *size)  # blízká záře
+        g["fc"].use()  # široká záře v 1/16
+        g["ta"].use(0)
+        set_uniform(g["blur"], "u_src", 0)
+        set_uniform(g["blur"], "u_dir", (0.0, 0.0))
+        vao(g["blur"]).render(moderngl.TRIANGLE_STRIP)
+        sw, sh = g["tc"].size
+        blur(g["tc"], g["fc"], sw, sh)
+        blur(g["tc"], g["fc"], sw, sh)
+        # přičíst do plátna
+        self.canvas.use()
+        self.canvas.viewport = (0, 0, cw, ch)
+        self.ctx.enable(moderngl.BLEND)
+        self.ctx.blend_func = moderngl.ONE, moderngl.ONE
+        g["ta"].use(1)
+        g["tc"].use(2)
+        set_uniform(g["add"], "u_a", 1)
+        set_uniform(g["add"], "u_b", 2)
+        set_uniform(g["add"], "u_strength", float(strength))
+        vao(g["add"]).render(moderngl.TRIANGLE_STRIP)
+        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
         self.painter.begin(self.canvas_size, screen=False)
 
     # --- převody souřadnic -------------------------------------------------------------

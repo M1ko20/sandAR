@@ -77,10 +77,13 @@ class Painter:
         self._tvao = ctx.vertex_array(self._tprog, [(self._tvbo, "2f 2f", "in_pos", "in_uv")])
         self.text_cache = TextCache(ctx)
         self.size = (1, 1)
+        self.min_text = 0  # na plátně pískoviště: nejmenší písmo (čitelné ze 2 m)
 
     def begin(self, size: tuple[int, int], screen: bool = True) -> None:
         """screen=True: obrazovka (y dolů). screen=False: plátno pískoviště (y=0 = textura v=0)."""
         self.size = size
+        # Pravidlo instalace: text na písku nejméně výška plátna / 30 (jinak ho ze 2 m nikdo nepřečte).
+        self.min_text = 0 if screen else int(size[1] / 30)
         flip = -1.0 if screen else 1.0
         for prog in (self._cprog, self._tprog):
             prog["u_size"].value = (float(size[0]), float(size[1]))
@@ -163,14 +166,18 @@ class Painter:
     def text(self, s: str, x: float, y: float, size: int = 24, color: Color = (1, 1, 1, 1),
              anchor: str = "tl", bold: bool = False, outline: int = 0, outline_color: Color = (0, 0, 0, 1),
              background: Color | None = None, padding: float = 6, alpha: float = 1.0,
-             rotation: float = 0.0) -> tuple[float, float]:
+             rotation: float = 0.0, tiny: bool = False) -> tuple[float, float]:
         """Vykreslí text. anchor = 2 znaky: t/m/b (svisle) + l/c/r (vodorovně). Vrací (šířka, výška).
 
         `alpha` prolíná celý text (pro animace) – na rozdíl od alfy v `color` nevytváří novou texturu.
         `rotation` [°] otočí text kolem bodu (x, y) po směru hodinových ručiček (90 = horní okraj
-        textu míří doprava, čte ho tedy člověk stojící u levé hrany plátna)."""
+        textu míří doprava, čte ho tedy člověk stojící u levé hrany plátna).
+        `tiny=True` povolí písmo menší než minimum plátna (jen pro popisky, které se nečtou z dálky,
+        např. uvedení zdroje dat)."""
         if not s:
             return 0.0, 0.0
+        if not tiny and size < self.min_text:
+            size = self.min_text
         c255 = tuple(int(round(v * 255)) for v in color)
         o255 = tuple(int(round(v * 255)) for v in outline_color)
         tex = self.text_cache.get(s, int(size), c255, bold, outline, o255)

@@ -13,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .audio import create_audio
 from .attract import AttractController
 from .calibration_store import calibration_path, load_calibration, load_play_area, save_calibration
 from .terrain import playarea
@@ -25,7 +26,10 @@ from .render.window import (MOD_SHIFT, Window, find_projector_monitor, needs_fra
                             terminate_glfw)
 from .sensor import create_sensor
 from .terrain import KinectCalibration, TerrainService
+from .terrain.hands import outer_rect
 from .ui.calibration import CalibrationMode
+from .render import hud
+from .ui.help_overlay import draw_help
 from .ui.operator import OperatorView
 
 log = logging.getLogger(__name__)
@@ -46,7 +50,8 @@ class SandboxApp:
         self.play_area = load_play_area(self.cal_path)
         self.full_kc, self.full_pc = kinect_cal, proj_cal
         kinect_cal, proj_cal = playarea.apply(kinect_cal, proj_cal, self.play_area)
-        self.terrain = TerrainService(self.sensor, settings.terrain, kinect_cal)
+        self.terrain = TerrainService(self.sensor, settings.terrain, kinect_cal, settings.hands,
+                                      outer_rect(self.full_kc, kinect_cal) if kinect_cal else None)
 
         # okna
         disp = settings.display
@@ -64,6 +69,7 @@ class SandboxApp:
         self.proj_win.set_cursor_visible(monitor is None)
 
         self.host = RenderHost(self.proj_win.ctx, settings)
+        self.host.sound = create_audio(settings.audio.enabled, settings.audio.volume)
         self.compositor = ProjectorCompositor(self.proj_win.ctx, disp.mesh_resolution)
         fb_size = self.proj_win.framebuffer_size
         self.proj_cal = (proj_cal or ProjectorCalibration.default(fb_size)).scaled_to(fb_size)
@@ -106,7 +112,8 @@ class SandboxApp:
         self.host.heightmap = None
 
     def set_kinect_calibration(self, cal: KinectCalibration | None) -> None:
-        self.terrain.set_calibration(cal)
+        outer = outer_rect(self.full_kc, cal) if cal is not None and self.full_kc is not None else None
+        self.terrain.set_calibration(cal, outer)
         self._configure_host()
         if self.game is not None:  # hra si znovu vytvoří textury pro nový rozměr
             self.game.stop()
@@ -148,6 +155,7 @@ class SandboxApp:
             if type(self.game) is cls:
                 return
             self.game.stop()
+        self.host.sound.stop_all()
         self.proj_win.make_current()
         self.game = cls(self.host)
         try:
@@ -159,6 +167,7 @@ class SandboxApp:
                 self.select_game("topo")
             return
         self.attract.show_intro(cls)
+        self.host.sound.play("whoosh", 0.8)
         log.info("Mód: %s", cls.title)
 
     def _cycle_game(self, step: int) -> None:
@@ -187,6 +196,11 @@ class SandboxApp:
             self.enter_calibration()
         elif name == "h":
             self.show_help = not self.show_help
+        elif name == "f9":
+            self.host.notify("Zvuk ztlumen" if self.host.sound.toggle_mute() else "Zvuk zapnut")
+        elif name in ("f10", "f11"):
+            vol = self.host.sound.change_volume(-0.1 if name == "f10" else 0.1)
+            self.host.notify(f"Hlasitost {vol * 100:.0f} %")
         elif name == "z":
             self.terrain.frozen = not self.terrain.frozen
             self.host.notify("Terén zmrazen" if self.terrain.frozen else "Terén se znovu snímá")
@@ -226,6 +240,7 @@ class SandboxApp:
                     last_seq = hm.seq
                 if not self.calibration.active and self.attract.want_switch():
                     self._attract_next()
+                self.host.sound.set_duck(self.settings.audio.attract_volume if self.attract.active else 1.0)
                 if self.calibration.active:
                     self.calibration.update()
                 elif self.host.heightmap is not None and self.game is not None:
@@ -311,17 +326,13 @@ class SandboxApp:
     def _canvas_overlays(self) -> None:
         """Nápověda a krátké zprávy přímo na písku."""
         p, host = self.host.painter, self.host
-        cw, ch = host.canvas_size
-        size = max(14, ch // 34)
+        canvas = host.canvas_size
         msgs = host.active_messages()
         if msgs and not self.calibration.active:
-            p.text(msgs[-1], size, ch - size, size=size, anchor="bl", color=(1, 1, 1, 1), outline=3)
-        if self.show_help and self.game is not None:
-            lines = [f"{self.game.title}", self.game.description, ""]
-            lines += [f"{k}: {d}" for k, d in self.game.keys]
-            lines += ["", "Hry: " + ", ".join(f"{mode_key(i)} {g.title}" for i, g in enumerate(self.game_classes))]
-            p.text("\n".join(lines), cw / 2, ch / 2, size=size, anchor="mc", color=(1, 1, 1, 1),
-                   background=(0, 0, 0, 0.7), padding=size)
+            sz = hud.size(canvas, 0.8)
+            hud.label(p, msgs[-1], sz * 0.4, canvas[1] - sz * 2.2, sz, anchor="bl")
+        if self.show_help and self.game is not None and not self.calibration.active:
+            draw_help(host, self.game, self.game_classes, mode_key)
 
     def snapshot(self, directory: Path) -> None:
         """Uloží aktuální obraz projektoru a operátorského okna jako PNG (ladění)."""
@@ -354,6 +365,7 @@ class SandboxApp:
             self.game = None
         self.terrain.stop()
         self.sensor.stop()
+        self.host.sound.close()
         if self.op_win:
             self.op_win.close()
         self.proj_win.close()

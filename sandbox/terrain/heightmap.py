@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from .hands import Hand
 
 
 @dataclass
@@ -19,10 +23,18 @@ class HeightMap:
     heights: np.ndarray  # float32 (GH, GW)
     size: tuple[float, float]  # rozměr bedny (šířka x, hloubka y) v metrech
     hands: np.ndarray | None = None  # bool (GH, GW) – nad buňkou je ruka/předmět
-    hand_points: list[tuple[float, float]] = field(default_factory=list)  # středy rukou [m, souř. bedny]
+    hand_points: list[tuple[float, float]] = field(default_factory=list)  # středy dlaní [m, souř. bedny]
+    hand_list: list["Hand"] = field(default_factory=list)  # sledované ruce (id, dlaň, špička, výška, rychlost)
     seq: int = 0
     timestamp: float = 0.0
     extra: dict = field(default_factory=dict)
+
+    @property
+    def has_hands(self) -> bool:
+        """Je nad pískem aspoň jedna ruka?"""
+        if self.hand_list:
+            return True
+        return self.hands is not None and int(self.hands.sum()) > 12
 
     @property
     def shape(self) -> tuple[int, int]:

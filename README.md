@@ -92,25 +92,50 @@ Nástroj `build/kinect2_bridge/kinect2_snap` (barva srovnaná s hloubkou) se ses
 | Esc 2× | konec |
 | F / N | (simulace) uhladit / nový terén, myš = hrabání |
 
+**Mapy**
+
 1. **Topografická mapa** – barvy podle výšky, vrstevnice, stínování. K vrstevnice, S stín, L legenda, ↑↓ hladina moře, ←→ hustota vrstevnic.
 2. **Turistická mapa** – hnědé vrstevnice na „papíře“, vodní plochy, kóty vrcholů v m n. m.
 3. **Výšková mapa** – výška jako barva/šedá se stupnicí v cm (G, A).
-4. **Postav podle předlohy** – červená = přidej písek, modrá = uber, čáry = vrstevnice předlohy.
-   Průběžné skóre shody 0–100 %, při ≥ 80 % „Výborně!“. M přepne režim *Mapa* (jen vrstevnice,
-   Enter = vyhodnotit), ←→ předloha, ↑↓ převýšení, **U uloží aktuální písek jako novou předlohu**
-   (učitel postaví krajinu, uloží, uhladí a žáci ji staví podle mapy).
-5. **Voda a povodně** – podrž ruku nad pískem a prší; voda stéká, plní údolí a jezera.
-   R déšť všude, P povodeň, X vysušit, D odtok na okrajích.
 
-6. **Kulička (minigolf)** – kulička se kutálí po skutečném svahu, postav dráhu do jamky; ruka do ní šťouchne.
-7. **Hledání pokladu** – pod pískem jsou poklady, kopej; kruh kolem ruky napovídá „Zima / Teplo / Hoří!“.
-8. **Živá sopka** – láva vyteče z nejvyššího vrcholu, stéká po svahu, chladne v černou krustu (E = erupce).
-9. **Mega tsunami** – z moře přijde vlna a zaplaví krajinu; hráze chrání města (T = vlna hned).
-10. **Živý ekosystém** – biomy, řeky, jezera, rostoucí lesy, sníh, srnky a ptáci podle terénu.
+**Příroda**
+
+4. **Skutečná krajina** – letecký snímek skutečného místa v ČR (Říp, Milešovka, Bezděz, Macocha,
+   Lysá hora, Pražský hrad) promítnutý na písek a stínovaný podle tvaru písku. Návštěvníci podle
+   skutečného výškového modelu stavějí kopce a údolí (červená = přidej, modrá = uber), při shodě ≥ 70 %
+   nápověda zmizí a zůstane čistá fotka. ←→ místo, M nápověda, V vrstevnice skutečného terénu.
+   Data (ČÚZK – Ortofoto ČR a DMR 5G, zdarma, CC BY 4.0) se stahují předem: `python -m sandbox ortofoto`
+   (potřebuje internet; uloží se do `data/ortofoto/`, na akci pak mód běží offline).
+5. **Voda a povodně** – ze zvednuté dlaně (aspoň ~25 cm nad pískem) prší (na ruku se promítne mráček,
+   z mráčku padají kapky a odstřikují); ruka, která modeluje v písku, neprší, ať jde kopat koryta.
+   Je vidět, jak voda stéká po svahu (pramínky unášené po spádu), v jezerech se hladina vlní.
+   R déšť všude, P povodeň, X vysušit, D odtok na okrajích.
+6. **Živý ekosystém** – biomy, řeky, jezera, rostoucí lesy, sníh a 12 druhů zvířat, každý ve svém
+   prostředí: ryby a kachny ve vodě, krabi a želvy na pláži, srnky, zajíci, lišky a motýli na loukách,
+   medvěd v lese, kamzíci na skalách, orel nad horami, ptáci nad krajinou. Počet roste s velikostí
+   prostředí, plachá zvířata utíkají před rukou.
+7. **Živá sopka** – nejvyšší vrchol se označí kruhem „SOPKA“ a 15 s se odpočítává. Místo sopky se zamkne
+   (jakmile je v bedně kopec aspoň 2 cm) a do konce kola se nemění, ani když lidé hrabou. Pak z něj vyteče láva, stéká po svahu a chladne v černou
+   krustu. Pod sopkou stojí vesnice – láva je zapálí, hrázemi a koryty je lze zachránit
+   (E erupce hned, A automatický cyklus, V vesnice).
+8. **Mega tsunami** – z moře přijde vlna a zaplaví krajinu; hráze chrání města (T = vlna hned). Strana
+   moře a města se vyberou na začátku kola a do vlny se nemění.
+
+**Hry (jeden hráč nebo tým)**
+
+9. **Kulička (minigolf)** – kulička se kutálí jen po skutečném svahu, postav dráhu do jamky.
+   K zapne odpalování kuličky rukou (výchozí vypnuto).
+10. **Hledání pokladu** – pod pískem jsou poklady, kopej; kruh kolem ruky napovídá „Zima / Teplo / Hoří!“.
 11. **Záchrana města** – povodeň z hor, postav hráze a zachraň co nejvíc domů (Enter = start).
-12. **Digitální otisk** – vyfotí krajinu jako mapu s názvem a promítne QR ke stažení do mobilu (F/P).
-    Telefon musí být ve stejné síti jako počítač; otevři port: `sudo firewall-cmd --add-port=8765/tcp`.
-13. **Nejvyšší hora** – minutová soutěž, rekord dne a všech dob; V = nejhlubší propast.
+    Ukáže se jen pramen („Odtud přijde voda!“), kudy voda poteče, musí hráči odhadnout sami.
+12. **Nejvyšší hora** – 30s soutěž, rekord dne a všech dob; V = nejhlubší propast.
+13. **Postav podle předlohy** – 17 předloh; první je **Hora se sedlem** (velká, realistická, jen nahrnutý
+    písek – dobře se ukazuje a jde postavit na 100 %), dál kopec, sopka, kráter, řeka, hrad s příkopem,
+    srdce, terasy, kaňon… Hodnotí se jen **hlavní část** v čárkovaném rámečku (tvar + 5 cm okolo), zbytek bedny je
+    ztmavený a nezáleží na něm. Červená = přidej, modrá = uber, zelená = sedí, cíl 80 %. Odchylka do
+    tolerance (1,5 cm) se počítá jako přesná shoda – celá zelená hlavní část = 100 %.
+    M režim *Mapa* (jen vrstevnice, Enter = vyhodnotit), ←→ předloha, ↑↓ převýšení,
+    **U uloží aktuální písek jako novou předlohu**.
 
 **Hry pro dva hráče** – bedna je čarou rozdělená přes střed delší strany, každý hráč stojí u své
 kratší strany (červení vlevo, modří vpravo na plátně) a texty má otočené k sobě:
@@ -122,19 +147,45 @@ kratší strany (červení vlevo, modří vpravo na plátně) a texty má otoče
     půlce nejvyšší vrchol. Pás 3 cm u čáry je neutrální.
 16. **Potopa ostrovů** – 20 s na stavbu ostrovů, pak stoupá moře (čím dál rychleji). Vyhrává poslední
     ostrov nad hladinou (ostrov = aspoň ~20 cm² souše v hráčově půlce). ↑↓ rychlost moře.
-17. **Modeluj podle předlohy** – hnědé vrstevnice předlohy, průběžná shoda v %. **P přepíná 1/2 hráče:**
-    dva hráči závodí, každý na své půlce se stejnou předlohou otočenou k sobě (přísné hodnocení, cíl 80 %).
-    Jeden hráč má celou bednu, barevnou nápovědu a **mírné hodnocení** – počítá se hlavně tvar
-    (kopec smí být nižší nebo vyšší, drobné hrbolky nevadí), cíl 60 %. M = nápověda, ←→ předloha.
+17. **Modeluj podle předlohy** – závod: oba hráči mají stejnou předlohu otočenou k sobě, barevnou
+    nápovědu (zapnutá) a hodnotí se jen hlavní část. Vyhrává, kdo první udrží shodu 80 %.
+    P přepne na jednoho hráče s mírným hodnocením, M nápověda, ←→ předloha.
 
-Mód 10 = klávesa 0, módy 11–17 = Shift+1 až Shift+7, Tab = další; v okně obsluhy jdou všechny vybrat klikem. Úvodní slajd každého módu vysvětlí návštěvníkům, co dělat.
+Mód 10 = klávesa 0, módy 11–17 = Shift+1 až Shift+7, Tab = další; v okně obsluhy jdou všechny vybrat klikem.
+Úvodní slajd každého módu vysvětlí návštěvníkům, co dělat. **H** promítne na písek nápovědu
+(jak hrát, ovládání, seznam módů) – velikost písma se přizpůsobí, vše se vejde.
 
 Vlastní předlohy: PNG v šedi (bílá = nejvýš) do složky `targets/`.
 
-**Skóre shody** = 1 − RMSE / RMSE(rovný písek): uhlazený písek má 0 %, přesná kopie 100 %.
-Celkový posun výšky se neodečítá do chyby (množství písku žák neovlivní), okraj 5 % se nehodnotí.
+**Skóre shody** = 1 − RMSE / RMSE(rovný písek) v hodnocené oblasti: uhlazený písek má 0 %, přesná
+kopie 100 %. Celkový posun výšky se do chyby nepočítá (množství písku žák neovlivní).
+
+## Detekce rukou
+
+Ruce se hledají v hloubce Kinectu (`sandbox/terrain/hands.py`), funguje i v úplné tmě a s obrazem
+promítnutým na rukou. Princip: **ruka je vždy konec paže, která vede přes okraj bedny** – z jakékoli
+strany, libovolný počet lidí. Hromádka písku okraje bedny nedosáhne, takže ji nikdy nezamění za ruku.
+
+1. model pozadí po pixelech (vyhrabaný důlek se přijme hned, nová hromádka po ⅓ s, ruka nikdy),
+2. popředí rozříznuté podle hloubkových hran (ruka nad hromádkou se s ní nespojí),
+3. paže = oblast, která sahá za stěnu (nebo k tělu nakloněnému nad bednou); tělo se pozná podle
+   výšky (nad 40 cm) a šířky (hlava/trup je široký, zvednutá paže úzká), takže ruka se najde i
+   zvednutá vysoko (až ~85 cm, výš už Kinect nevidí); dlaň = konec paže podle geodetické vzdálenosti
+   od místa vstupu, dvě ruce na jedné paži/těle se rozliší větvením,
+4. sledování se stálým číslem ruky a vyhlazením One Euro; ruka výš než ~25 cm nad pískem je
+   „zvednutá“ (`Hand.raised`, s hysterezí) – na to reagují efekty ve vzduchu (déšť), modelování ne.
+
+Pixely ruky terén vůbec nepoužije – ruka položená na písku se do mapy nepropíše. V okně obsluhy je
+ruka v hloubkovém obraze fialová a v promítání má kroužek s číslem a výškou nad pískem. Naladěno
+na nahrávce ze skutečné bedny (`recordings/ruce.npz`, přehrání: `--sensor replay --replay recordings/ruce.npz`).
+V simulaci prostřední tlačítko myši vytvoří virtuální ruku. Parametry: sekce `hands` v nastavení.
 
 ## Provoz na akci
+
+* **Zvuk**: každý mód má zvuky (déšť, hrom, láva, vlny, odpočty, fanfáry…), všechny syntetizované
+  v `sandbox/sounds.py`, přehrávané přes PipeWire/PulseAudio/ALSA (`pw-cat`, `pacat`, `aplay` – bez
+  dalších knihoven). F9 ztlumit, F10/F11 hlasitost, v attract mode je zvuk ztlumený. Poslech všech zvuků:
+  `python -m sandbox zvuky` (`--game thunder` jeden, `--out složka` uložit WAV). Nastavení v sekci `audio`.
 
 * **Úvodní slajd**: po přepnutí módu se na písek na 5 s promítne název a věta „jak hrát“.
 * **Attract mode**: když se 90 s nikdo nedotkne písku (žádné ruce, žádná změna terénu),

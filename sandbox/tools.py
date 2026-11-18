@@ -82,14 +82,15 @@ def render_snapshots(settings: Settings, out_dir: Path, frames: int = 20, size: 
         if only and cls.id != only:
             continue
         hm = None
+        sim.set_hands([])
         for i in range(frames):
-            hm = proc.process(sim.render_depth(), seq=i)
+            hm = proc.process(sim.render_depth(), seq=i, timestamp=i / 30)
+        # virtuální ruka nad pískem pro hry, které na ruce reagují (skutečná detekce, ne podvrh)
+        W, D = sim.BOX_SIZE
+        sim.set_hands([(W * 0.3, D * 0.42, 0.10)])
+        for i in range(frames, frames + 6):
+            hm = proc.process(sim.render_depth(), seq=i, timestamp=i / 30)
         assert hm is not None
-        # trocha "rukou" pro hry, které na ně reagují
-        hands = np.zeros(hm.shape, bool)
-        hands[hm.shape[0] // 3: hm.shape[0] // 2, hm.shape[1] // 4: hm.shape[1] // 3] = True
-        hm.hands = hands
-        hm.hand_points = proc.hand_points(hands)
         host.update_heightmap(hm)
         game = cls(host)
         game.start()
@@ -105,3 +106,54 @@ def render_snapshots(settings: Settings, out_dir: Path, frames: int = 20, size: 
         save(screen_fbo, out_dir / f"{cls.order:02d}_{cls.id}_projektor.png")
         game.stop()
     return written
+
+
+def sound_preview(only: str | None = None, out: Path | None = None, volume: float = 0.8) -> int:
+    """Přehraje (nebo uloží do WAV) zvuky z banky – na poslech a ladění."""
+    import time
+    import wave
+
+    from . import sounds
+    from .audio import TARGET_RMS, Audio, _backend_cmd
+
+    names = [n for n in sounds.BANK if only is None or n == only]
+    if not names:
+        print(f"Neznámý zvuk {only!r}. Zvuky: {', '.join(sounds.BANK)}")
+        return 1
+    if out is not None:
+        out.mkdir(parents=True, exist_ok=True)
+        for name in names:
+            x = sounds.build(name)
+            rms = float(np.sqrt(np.mean(x ** 2))) or 1.0
+            x = x * float(np.clip(TARGET_RMS / rms, 0.25, 1.0)) * 2.0
+            pcm = (np.clip(np.repeat(x[:, None], 2, 1), -1, 1) * 32767).astype("<i2")
+            with wave.open(str(out / f"{name}.wav"), "wb") as w:
+                w.setnchannels(2)
+                w.setsampwidth(2)
+                w.setframerate(sounds.SR)
+                w.writeframes(pcm.tobytes())
+            print(out / f"{name}.wav")
+        return 0
+    if _backend_cmd() is None:
+        print("Není přehrávač (pw-cat / pacat / aplay).")
+        return 1
+    audio = Audio(volume)
+    time.sleep(1.5)  # banka se generuje na pozadí
+    try:
+        for name in names:
+            loop = sounds.BANK[name][1]
+            print(f"{name}{' (smyčka)' if loop else ''}", flush=True)
+            if loop:
+                t_end = time.monotonic() + 5.0
+                while time.monotonic() < t_end:
+                    audio.loop(name, 1.0)
+                    time.sleep(0.05)
+                time.sleep(0.6)
+            else:
+                audio.play(name)
+                time.sleep(len(audio._sounds.get(name, [])) / sounds.SR + 0.4)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        audio.close()
+    return 0
