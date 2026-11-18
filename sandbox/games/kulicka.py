@@ -41,7 +41,7 @@ void main() {
     // posečený trávník: široké pruhy dvou směrů sekání (šachovnice jako na stadionu)
     float mow = kulicka_band(pm.x / 0.24, 0.35);
     float cross = kulicka_band(pm.y / 0.24, 0.35);
-    c *= mix(0.86, 1.08, mow) * mix(0.96, 1.03, cross);
+    c *= mix(0.94, 1.04, mow) * mix(0.97, 1.02, cross);
     // nejvyšší vršky = písečný bunkr
     float bunker = smoothstep(0.84, 0.92, t);
     c = mix(c, vec3(1.0, 0.85, 0.50), bunker);

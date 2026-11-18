@@ -164,8 +164,10 @@ vec3 vs_arena_k(vec3 c, vec2 uv, float tint, float rimk) {
 
     // 1) půlka v barvě týmu (terén zůstává čitelný; voda zůstane modrá)
     float wet = smoothstep(0.08, 0.3, c.b - max(c.r, c.g));
-    vec3 tcol = side == 0 ? vec3(1.0, 0.30, 0.18) * 1.5 : vec3(0.22, 0.45, 1.0) * 2.0;
-    c = mix(c, tcol * lum, tint * (0.8 + 0.4 * power) * (1.0 - wet));
+    vec3 tcol = side == 0 ? vec3(1.0, 0.30, 0.18) * 1.5 : vec3(0.16, 0.42, 1.0) * 1.45;
+    // modrá na teplém (žluto-oranžovém) terénu šedne – potřebuje silnější podíl, aby byly půlky vyrovnané
+    float tk = side == 0 ? 1.0 : 1.7;
+    c = mix(c, tcol * lum, clamp(tint * tk * (0.8 + 0.4 * power), 0.0, 0.85) * (1.0 - wet));
 
     // 2) záře podél stěn půlky, vlna běží od hráče k bariéře
     float e = min(min(pm.x, W - pm.x), min(pm.y, D - pm.y));
