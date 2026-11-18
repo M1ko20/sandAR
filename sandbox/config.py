@@ -123,6 +123,13 @@ class WaterSettings:
 
 
 @dataclass
+class AudioSettings:
+    enabled: bool = True  # zvuky módů (výstup přes pw-cat / pacat / aplay)
+    volume: float = 0.8  # 0..1 (za běhu F10/F11, F9 ztlumit)
+    attract_volume: float = 0.4  # násobek hlasitosti v attract mode (nikdo nehraje)
+
+
+@dataclass
 class AttractSettings:
     enabled: bool = True
     idle_seconds: float = 90.0  # [s] bez rukou a změn terénu -> módy se samy střídají
@@ -149,6 +156,7 @@ class Settings:
     challenge: ChallengeSettings = field(default_factory=ChallengeSettings)
     water: WaterSettings = field(default_factory=WaterSettings)
     attract: AttractSettings = field(default_factory=AttractSettings)
+    audio: AudioSettings = field(default_factory=AudioSettings)
     log: LogSettings = field(default_factory=LogSettings)
     start_game: str = "topo"
 

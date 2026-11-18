@@ -179,6 +179,7 @@ class OperatorView:
             info += f" · terén {proc.last_ms:4.1f} ms, pokrytí {proc.last_coverage * 100:3.0f} %"
         if app.terrain.frozen:
             info += " · ZMRAZENO"
+        info += " · " + app.host.sound.status()
         at = app.attract
         if at.active:
             info += " · ATTRACT MODE"

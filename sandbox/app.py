@@ -13,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .audio import create_audio
 from .attract import AttractController
 from .calibration_store import calibration_path, load_calibration, load_play_area, save_calibration
 from .terrain import playarea
@@ -68,6 +69,7 @@ class SandboxApp:
         self.proj_win.set_cursor_visible(monitor is None)
 
         self.host = RenderHost(self.proj_win.ctx, settings)
+        self.host.sound = create_audio(settings.audio.enabled, settings.audio.volume)
         self.compositor = ProjectorCompositor(self.proj_win.ctx, disp.mesh_resolution)
         fb_size = self.proj_win.framebuffer_size
         self.proj_cal = (proj_cal or ProjectorCalibration.default(fb_size)).scaled_to(fb_size)
@@ -153,6 +155,7 @@ class SandboxApp:
             if type(self.game) is cls:
                 return
             self.game.stop()
+        self.host.sound.stop_all()
         self.proj_win.make_current()
         self.game = cls(self.host)
         try:
@@ -164,6 +167,7 @@ class SandboxApp:
                 self.select_game("topo")
             return
         self.attract.show_intro(cls)
+        self.host.sound.play("whoosh", 0.8)
         log.info("Mód: %s", cls.title)
 
     def _cycle_game(self, step: int) -> None:
@@ -192,6 +196,11 @@ class SandboxApp:
             self.enter_calibration()
         elif name == "h":
             self.show_help = not self.show_help
+        elif name == "f9":
+            self.host.notify("Zvuk ztlumen" if self.host.sound.toggle_mute() else "Zvuk zapnut")
+        elif name in ("f10", "f11"):
+            vol = self.host.sound.change_volume(-0.1 if name == "f10" else 0.1)
+            self.host.notify(f"Hlasitost {vol * 100:.0f} %")
         elif name == "z":
             self.terrain.frozen = not self.terrain.frozen
             self.host.notify("Terén zmrazen" if self.terrain.frozen else "Terén se znovu snímá")
@@ -231,6 +240,7 @@ class SandboxApp:
                     last_seq = hm.seq
                 if not self.calibration.active and self.attract.want_switch():
                     self._attract_next()
+                self.host.sound.set_duck(self.settings.audio.attract_volume if self.attract.active else 1.0)
                 if self.calibration.active:
                     self.calibration.update()
                 elif self.host.heightmap is not None and self.game is not None:
@@ -355,6 +365,7 @@ class SandboxApp:
             self.game = None
         self.terrain.stop()
         self.sensor.stop()
+        self.host.sound.close()
         if self.op_win:
             self.op_win.close()
         self.proj_win.close()

@@ -58,6 +58,14 @@ class Game:
     def __init__(self, host: "RenderHost") -> None:
         self.host = host
 
+    @property
+    def sfx(self):
+        """Zvuk (``sandbox/audio.py``): ``sfx.play(název, gain, x)``, ``sfx.loop(název, hlasitost, x)``.
+        Bez zvukového výstupu (testy) nic nedělá."""
+        from ..audio import NullAudio
+
+        return getattr(self.host, "sound", None) or NullAudio()
+
     # --- životní cyklus ----------------------------------------------------------
     def start(self) -> None:
         """Vytvoření shaderů a textur. Volá se při výběru hry a po změně kalibrace."""

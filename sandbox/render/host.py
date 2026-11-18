@@ -43,6 +43,9 @@ class RenderHost:
         self.box_size = (1.0, 0.75)
         self.messages: list[tuple[str, float]] = []
         self._glow: dict[str, Any] | None = None
+        from ..audio import NullAudio
+
+        self.sound = NullAudio()  # aplikace nastaví skutečný výstup (sandbox/audio.py)
 
     # --- plátno a výšky -----------------------------------------------------------
     @property
