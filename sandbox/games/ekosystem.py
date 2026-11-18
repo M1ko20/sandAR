@@ -35,12 +35,36 @@ uniform float u_forest_s;
 uniform float u_treeline;
 uniform float u_snow;
 uniform float u_rock_s;
+uniform vec2 u_wind;         // směr větru (jednotkový)
+uniform float u_golden;      // 0..1 teplé světlo (ráno / podvečer)
 
-float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-float vnoise(vec2 p) {
+float eko_hash(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+float eko_noise(vec2 p) {
     vec2 i = floor(p), f = fract(p);
     f = f * f * (3.0 - 2.0 * f);
-    return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y);
+    return mix(mix(eko_hash(i), eko_hash(i + vec2(1, 0)), f.x),
+               mix(eko_hash(i + vec2(0, 1)), eko_hash(i + vec2(1, 1)), f.x), f.y);
+}
+float eko_fbm(vec2 p) {
+    return 0.5 * eko_noise(p) + 0.3 * eko_noise(p * 2.07 + 3.1) + 0.2 * eko_noise(p * 4.13 + 7.7);
+}
+
+// třpyt sněhu: v buňce 25 mm jedna jiskra (měkký bod + paprsky), plynule zablýskne a zhasne
+float eko_sparkle(vec2 p) {
+    vec2 g = p * 40.0;
+    vec2 id = floor(g);
+    float r = eko_hash(id);
+    if (r > 0.55) return 0.0;
+    vec2 off = vec2(eko_hash(id + 7.1), eko_hash(id + 3.3)) * 0.5 + 0.25;
+    vec2 d = fract(g) - off;
+    float tw = pow(max(sin(u_clock * (1.3 + 2.0 * r) + r * 40.0), 0.0), 4.0);
+    float core = exp(-dot(d, d) / 0.018);
+    float rays = exp(-abs(d.x) / 0.06) * exp(-abs(d.y) / 0.28) + exp(-abs(d.y) / 0.06) * exp(-abs(d.x) / 0.28);
+    return tw * (core + 0.6 * rays);
 }
 
 void main() {
@@ -48,13 +72,23 @@ void main() {
     vec2 p = uv * u_box;               // metry
     float h = height_at(uv);
     float s = length(height_grad(uv));
-    float n = vnoise(p * 45.0) * 0.6 + vnoise(p * 140.0) * 0.4;
+    float n = eko_noise(p * 30.0) * 0.65 + eko_noise(p * 70.0) * 0.35;
 
-    vec3 meadow = mix(vec3(0.42, 0.85, 0.12), vec3(0.62, 0.92, 0.18), n);
-    vec3 forest = mix(vec3(0.05, 0.40, 0.10), vec3(0.10, 0.52, 0.14), n);
-    vec3 rock = mix(vec3(0.46, 0.40, 0.37), vec3(0.66, 0.60, 0.56), n);
-    vec3 snow = vec3(0.96, 0.98, 1.0);
-    vec3 beach = mix(vec3(1.0, 0.86, 0.42), vec3(1.0, 0.93, 0.60), n);
+    // vítr: poryvy putují krajinou, tráva se v nich leskne (světlejší rub stébel)
+    float along = dot(p, u_wind);
+    float gust = smoothstep(0.35, 0.75, eko_noise(p * 5.0 - u_wind * u_clock * 0.45));
+    float wave = 0.5 + 0.5 * sin(along * 40.0 - u_clock * 2.4 + eko_noise(p * 10.0) * 3.0);
+    float sway = wave * gust;
+
+    vec3 meadow = mix(vec3(0.38, 0.80, 0.10), vec3(0.58, 0.90, 0.16), n);
+    meadow = mix(meadow, vec3(0.80, 0.96, 0.42), sway * 0.55);
+    vec3 forest = mix(vec3(0.04, 0.36, 0.09), vec3(0.09, 0.50, 0.14), n);
+    forest = mix(forest, vec3(0.20, 0.62, 0.22), sway * 0.35);
+    // skály: vrstvy hornin podle výšky (pruhy po vrstevnicích), teplé a studené odstíny
+    float strata = 0.5 + 0.5 * sin(h * 700.0 + eko_noise(p * 18.0) * 4.0);
+    vec3 rock = mix(vec3(0.46, 0.39, 0.35), vec3(0.68, 0.61, 0.55), n);
+    rock = mix(rock, rock * vec3(0.82, 0.80, 0.86), smoothstep(0.55, 0.8, strata) * 0.8);
+    vec3 beach = mix(vec3(1.0, 0.84, 0.40), vec3(1.0, 0.93, 0.62), n);
 
     float wl = u_water_level;
     float fo = max(smoothstep(u_forest_h - 0.003, u_forest_h + 0.003, h),
@@ -63,31 +97,51 @@ void main() {
     float ro = max(smoothstep(u_treeline - 0.003, u_treeline + 0.003, h + 0.004 * (n - 0.5)),
                    smoothstep(u_rock_s - 0.06, u_rock_s + 0.06, s));
     c = mix(c, rock, ro);
-    float sn = smoothstep(u_snow - 0.002, u_snow + 0.002, h + 0.006 * (n - 0.5));
-    c = mix(c, snow, sn);
-    c = mix(c, beach, 1.0 - smoothstep(wl + u_beach - 0.0015, wl + u_beach + 0.0015, h));
-    c *= mix(0.50, 1.18, hillshade(uv, 2.5));
-    // třpyt sněhu
-    float tw = step(0.985, hash(floor(p * 260.0) + floor(u_clock * 3.0)));
-    c += sn * tw * 0.5;
+    float sn = smoothstep(u_snow - 0.0025, u_snow + 0.0025, h + 0.004 * (eko_noise(p * 25.0) - 0.5));
+    float be = 1.0 - smoothstep(wl + u_beach - 0.0015, wl + u_beach + 0.0015, h);
+    c = mix(c, beach, be);
+    float hs = hillshade(uv, 2.6);
+    c *= mix(0.48, 1.20, hs);
+    // sníh: modré stíny, zářivě bílá osvětlená strana, třpyt
+    vec3 snow = mix(vec3(0.55, 0.68, 0.98), vec3(1.0, 1.0, 1.0), smoothstep(0.15, 0.85, hs));
+    c = mix(c, snow, sn * (1.0 - be));
+    c += vec3(0.9, 0.95, 1.0) * sn * eko_sparkle(p) * 0.9;
     // jemné vrstevnice (orientace v terénu)
     vec2 cl = contours(h);
     c = mix(c, c * 0.55, cl.y * 0.6);
 
     // voda: moře, jezera, řeky – sdílené vykreslení vody (proud po směru toku, průhledné mělčiny)
     vec4 hy = texture(u_hydro, uv);
-    float depth = max(max(wl - h, sample_bicubic(u_lake, uv) - h), 0.0);
-    float river = smoothstep(0.30, 0.45, sample_bicubic(u_hydro, uv));
+    float sea = max(wl - h, 0.0);
+    float depth = max(sea, max(sample_bicubic(u_lake, uv) - h, 0.0));
+    float rv = sample_bicubic(u_hydro, uv);
+    float river = smoothstep(0.30, 0.45, rv);
     vec2 dir = hy.gb;
     float L = length(dir);
     dir = L > 1e-3 ? dir / L : vec2(0.0);
     // řeka: koryto hloubky ~2–6 mm, proud tím rychlejší, čím je řeka mohutnější
-    float rdepth = river * (0.0025 + 0.004 * clamp(sample_bicubic(u_hydro, uv), 0.0, 1.0));
-    vec2 vel = dir * (0.07 + 0.10 * river) * (1.0 - smoothstep(0.004, 0.012, depth));
-    // klidná voda se jen pomalu vlní (vítr)
-    vel += vec2(0.012, 0.006) * smoothstep(0.004, 0.012, depth);
-    vec4 wr = water_shade(c, uv, max(depth, rdepth), vel, 0.0);
+    float rdepth = river * (0.0025 + 0.004 * clamp(rv, 0.0, 1.0));
+    vec2 vel = dir * (0.08 + 0.12 * river) * (1.0 - smoothstep(0.004, 0.012, depth));
+    // klidná voda se vlní ve větru
+    vel += u_wind * 0.015 * smoothstep(0.004, 0.012, depth);
+    // příboj: vlnky běží ke břehu a rozbíjejí se v bílou pěnu
+    float surf = 0.0;
+    if (sea > 0.0 && sea < 0.008) {
+        float ph = sea * 900.0 + u_clock * 1.8 + eko_noise(p * 14.0) * 2.5;
+        surf = smoothstep(0.75, 1.0, sin(ph)) * (1.0 - smoothstep(0.002, 0.008, sea));
+    }
+    vec4 wr = water_shade(c, uv, max(depth, rdepth), vel, surf * 0.8);
     c = wr.rgb;
+    // peřeje: světlé jiskření na mohutných řekách
+    float rap = smoothstep(0.6, 0.9, eko_noise(p * 60.0 - dir * u_clock * 3.0)) * river * smoothstep(0.5, 1.0, rv);
+    c = mix(c, vec3(0.92, 0.98, 1.0), rap * 0.5 * (1.0 - smoothstep(0.004, 0.012, depth)));
+
+    // stíny oblaků putují s větrem přes celou krajinu
+    float cs = eko_fbm(p * 3.2 - u_wind * u_clock * 0.035);
+    float shadow = smoothstep(0.52, 0.68, cs);
+    c = mix(c, c * vec3(0.58, 0.64, 0.80), shadow * 0.65);
+    // teplé světlo slunce (ráno / podvečer) – jen na osvětlených svazích
+    c *= mix(vec3(1.0), vec3(1.10, 0.98, 0.82), u_golden * smoothstep(0.4, 0.9, hs) * (1.0 - shadow * 0.7));
     f_color = vec4(c, 1.0);
 }
 """
@@ -224,25 +278,48 @@ class EcosystemGame(Game):
         if self.hydro_tex is None:
             return
         p = self.params
+        wind = self._wind()
+        golden = 0.5 + 0.5 * math.sin(self.clock * 2 * math.pi / 150.0)
         self.host.draw_fullscreen(self.prog, u_hydro=(self.hydro_tex, 1), u_lake=(self.lake_tex, 2), u_clock=float(self.clock),
                                   u_beach=p.beach, u_forest_h=p.forest_height, u_forest_s=p.forest_slope,
-                                  u_treeline=p.treeline, u_snow=p.snow, u_rock_s=p.rock_slope)
-        self._draw_trees()
+                                  u_treeline=p.treeline, u_snow=p.snow, u_rock_s=p.rock_slope,
+                                  u_wind=(float(wind[0]), float(wind[1])), u_golden=float(golden))
+        self._draw_trees(wind)
         if self.show_animals and self.animals is not None:
             draw_fauna(self.host, self.animals, self.clock)
+        self.host.glow(0.55, 0.82)  # třpyt sněhu a vody, jasné koruny
 
     def _px(self) -> tuple[float, float]:
         cw, ch = self.host.canvas_size
         bw, bd = self.host.box_size
         return cw / bw, ch / bd
 
-    def _draw_trees(self) -> None:
+    def _wind(self) -> np.ndarray:
+        """Směr větru – pomalu se stáčí (stíny oblaků, vlny trávy, kymácení stromů)."""
+        a = 0.5 + 0.6 * math.sin(self.clock * 0.021)
+        return np.array([math.cos(a), math.sin(a)])
+
+    def _sway(self, pos: np.ndarray, wind: np.ndarray) -> np.ndarray:
+        """Výchylka korun ve větru [m]: vlny poryvů běží lesem po směru větru."""
+        t = self.clock
+        along = pos @ wind
+        gust = 0.55 + 0.45 * np.sin(pos[:, 0] * 6.0 + t * 0.7) * np.sin(pos[:, 1] * 5.0 - t * 0.5)
+        wave = np.sin(along * 40.0 - t * 2.4) * 0.6 + np.sin(along * 23.0 - t * 1.6 + pos[:, 1] * 9.0) * 0.4
+        amp = (0.0025 + 0.002 * wave) * gust  # 1–6 mm = 1–5 px na plátně
+        return amp[:, None] * wind[None, :]
+
+    def _draw_trees(self, wind: np.ndarray | None = None) -> None:
         veg = self.veg
         if veg is None or not len(veg):
             return
         sx, sy = self._px()
-        x = veg.pos[:, 0] * sx
-        y = veg.pos[:, 1] * sy
+        sway = self._sway(veg.pos, wind if wind is not None else self._wind())
+        x0 = veg.pos[:, 0] * sx
+        y0 = veg.pos[:, 1] * sy
+        x = x0 + sway[:, 0] * sx * 0.6
+        y = y0 + sway[:, 1] * sy * 0.6
+        tx = x0 + sway[:, 0] * sx  # vršek koruny se kymácí víc
+        ty = y0 + sway[:, 1] * sy
         r = veg.radii() * sx
         n = len(x)
         con = veg.kind == eco.CONIFER
@@ -256,7 +333,7 @@ class EcosystemGame(Game):
         p = self.host.painter
         seg = 14
         # stíny (vpravo dole, světlo jde zleva shora jako ve stínování reliéfu)
-        sh = disc_triangles(x + r * 0.35, y + r * 0.45, r * 1.02, seg)
+        sh = disc_triangles(x0 + r * 0.35, y0 + r * 0.45, r * 1.02, seg)
         p.triangles(sh.reshape(-1, 2), (0.0, 0.08, 0.0, 0.45))
         rot = (veg.pos[:, 0] * 997 % 1.0) * 6.28
         crown = np.empty((n, seg * 3, 2), np.float32)
@@ -264,8 +341,8 @@ class EcosystemGame(Game):
             crown[con] = disc_triangles(x[con], y[con], r[con], seg, lobes=7, lobe_amp=0.22, rot=rot[con])
         if (~con).any():
             crown[~con] = disc_triangles(x[~con], y[~con], r[~con], seg, lobes=3, lobe_amp=0.10, rot=rot[~con])
-        mid = disc_triangles(x - r * 0.12, y - r * 0.14, r * 0.62, seg)
-        top = disc_triangles(x - r * 0.25, y - r * 0.28, r * 0.28, 10)
+        mid = disc_triangles(tx - r * 0.12, ty - r * 0.14, r * 0.62, seg)
+        top = disc_triangles(tx - r * 0.25, ty - r * 0.28, r * 0.28, 10)
         midc = base * 0.4 + light * 0.6
         verts = np.concatenate([crown, mid, top], 1).reshape(-1, 2)
         cols = np.concatenate([np.repeat(base[:, None], seg * 3, 1), np.repeat(midc[:, None], seg * 3, 1),

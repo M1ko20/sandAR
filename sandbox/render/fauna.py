@@ -14,11 +14,16 @@ import numpy as np
 from ..sim.fauna import Fauna, Herd
 
 
+_UNIT: dict[int, np.ndarray] = {}
+
+
 def _ellipse(cx: float, cy: float, rx: float, ry: float, seg: int = 12) -> np.ndarray:
-    a = np.linspace(0, 2 * math.pi, seg + 1)
-    ring = np.stack([cx + rx * np.cos(a), cy + ry * np.sin(a)], 1)
-    c = np.array([cx, cy])
-    return np.stack([np.repeat(c[None], seg, 0), ring[:-1], ring[1:]], 1).reshape(-1, 2)
+    u = _UNIT.get(seg)
+    if u is None:  # jednotkový kruh jako vějíř trojúhelníků (střed, okraj, okraj)
+        a = np.linspace(0, 2 * math.pi, seg + 1)
+        ring = np.stack([np.cos(a), np.sin(a)], 1)
+        u = _UNIT[seg] = np.stack([np.zeros((seg, 2)), ring[:-1], ring[1:]], 1).reshape(-1, 2)
+    return u * (rx, ry) + (cx, cy)
 
 
 def _poly(*pts) -> np.ndarray:
@@ -122,7 +127,9 @@ def _parts(key: str, t: float) -> list[tuple[np.ndarray, tuple]]:
     return [(_ellipse(0, 0, 0.5, 0.25), (1, 1, 1, 1))]
 
 
-SCALE = 1.25  # zvířata o čtvrtinu větší než skutečná délka v metrech – ať jsou ze 2 m vidět
+SCALE = 1.5  # zvířata větší než skutečná délka v metrech – ať jsou ze 2 m vidět
+HALO = 1.22  # světlý lem kolem siluety (zvíře se odliší od lesa, vody i skal)
+HALO_COLOR = (1.0, 0.97, 0.86, 0.75)
 FLYING_SHADOW = {"ptak": 0.9, "orel": 1.3, "motyl": 0.35}
 
 
@@ -146,12 +153,17 @@ def draw_fauna(host, fauna: Fauna, clock: float) -> None:
             c, s = math.cos(h.heading[i]), math.sin(h.heading[i])
             rot = np.array([[c, s], [-s, c]]) * L
             parts = _parts(key, float(h.phase[i]) + clock * (1 if h.sp.flier else 0))
-            shadow = np.concatenate([p for p, _ in parts]) @ rot + [x + L * lift, y + L * lift * 1.3]
-            verts.append(shadow)
-            cols.append(np.tile([0, 0, 0, SHADOW[3] * vis], (len(shadow), 1)))
-            for pts, col in parts:
-                v = pts @ rot + [x, y]
-                verts.append(v)
-                cols.append(np.tile([col[0], col[1], col[2], col[3] * vis], (len(v), 1)))
+            body = np.concatenate([p for p, _ in parts])
+            m = len(body)
+            # stín, světlý lem (silueta zvětšená kolem středu těla), pak tělo – vše jedním polem
+            verts.append(body @ rot + [x + L * lift, y + L * lift * 1.3])
+            verts.append(body @ (rot * HALO) + [x, y])
+            verts.append(body @ rot + [x, y])
+            c = np.empty((3 * m, 4), np.float32)
+            c[:m] = (0, 0, 0, SHADOW[3] * vis)
+            c[m:2 * m] = (*HALO_COLOR[:3], HALO_COLOR[3] * vis * (0.6 if key == "ryba" else 1.0))
+            c[2 * m:] = np.repeat(np.array([col for _, col in parts], np.float32), [len(p) for p, _ in parts], 0)
+            c[2 * m:, 3] *= vis
+            cols.append(c)
     if verts:
         host.painter.triangles(np.concatenate(verts).astype(np.float32), np.concatenate(cols).astype(np.float32))
