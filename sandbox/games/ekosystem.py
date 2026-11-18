@@ -195,6 +195,8 @@ class EcosystemGame(Game):
         self.slope: np.ndarray | None = None
         self.wet: np.ndarray | None = None
         self.heights: np.ndarray | None = None
+        self.ambience: dict[str, tuple[float, float]] = {}  # zvuk: smyčka -> (hlasitost, poloha x)
+        self._river_sound = (0.0, 0.5)
 
     def stop(self) -> None:
         self.prog.release()
@@ -224,6 +226,34 @@ class EcosystemGame(Game):
         self.heights = smooth
         self.slope = eco.slope_map(smooth, hm.cell_size)
         self.biome = eco.classify_biomes(smooth, self.slope, self.params)
+        self._ambience()
+
+    @staticmethod
+    def _frac_x(mask: np.ndarray) -> tuple[float, float]:
+        """Podíl plochy a vodorovné těžiště masky (0..1) – pro hlasitost a stereo."""
+        col = mask.sum(0, dtype=np.float32)
+        tot = float(col.sum())
+        if tot <= 0:
+            return 0.0, 0.5
+        return tot / mask.size, float((col * np.arange(len(col))).sum() / tot / max(len(col) - 1, 1))
+
+    def _ambience(self) -> None:
+        """Hlasitosti zvukového prostředí podle krajiny (počítá se jen při přepočtu biomů, ne každý snímek).
+        Tiché pozadí: les s ptáky tam, kde je les, vítr nad horami a loukami, potok u řek, příboj u moře."""
+        b = self.biome
+        assert b is not None
+        f_forest, x_forest = self._frac_x(b == eco.FOREST)
+        f_mount, x_mount = self._frac_x((b == eco.ROCK) | (b == eco.SNOW))
+        f_meadow, _ = self._frac_x(b == eco.MEADOW)
+        f_sea, x_sea = self._frac_x(b == eco.WATER)
+        amb = {
+            "forest": (0.10 + 0.22 * min(1.0, f_forest / 0.5) if f_forest > 0.03 else 0.0, x_forest),
+            "wind": (0.05 + 0.22 * min(1.0, f_mount / 0.15) + 0.06 * min(1.0, f_meadow / 0.4), x_mount),
+            "sea": (0.35 * min(1.0, f_sea / 0.25) if f_sea > 0.01 else 0.0, x_sea),
+        }
+        river = self._river_sound if self.show_rivers else (0.0, 0.5)
+        amb["stream"] = river
+        self.ambience = amb
 
     def _analyze_water(self, hm) -> None:
         gw = hm.shape[1]
@@ -245,6 +275,10 @@ class EcosystemGame(Game):
         self.hydro_tex.write(np.ascontiguousarray(data).tobytes())
         self.lake_tex.write(np.ascontiguousarray(data[..., 3]).tobytes())
         self.wet = self.hydro.wet_mask(hm.shape) if self.show_rivers else np.zeros(hm.shape, bool)
+        f_river, x_river = self._frac_x(self.hydro.river > 0)
+        f_lake, _ = self._frac_x(self.hydro.lake > 0.002)
+        lvl = 0.26 * min(1.0, f_river / 0.04) + 0.06 * min(1.0, f_lake / 0.1) if f_river > 0.003 else 0.0
+        self._river_sound = (lvl, x_river)
 
     def update(self, hm, dt: float) -> None:
         self._ensure(hm)
@@ -263,6 +297,8 @@ class EcosystemGame(Game):
         self.veg.spawn(dt, self.heights, self.biome, self.wet, self.slope)
         hands = [h.pos for h in hm.hand_list] + [h.tip for h in hm.hand_list] if hm.hand_list else hm.hand_points
         self.animals.step(dt, self.biome, self.wet, self._water(hm.shape), hands)
+        for name, (level, x) in self.ambience.items():
+            self.sfx.loop(name, level, x=x)
 
     def _water(self, shape: tuple[int, int]) -> np.ndarray:
         """Buňky pod vodou: moře + jezera (pro ryby a kachny)."""

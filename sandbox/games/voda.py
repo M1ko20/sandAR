@@ -426,6 +426,9 @@ class WaterGame(Game):
         self.rip = np.zeros((0, 4), np.float32)  # x, y, stáří, síla
         self.streaks = np.zeros((0, 5), np.float32)  # x, y, stáří, život, náhodná fáze
         self.rng = np.random.default_rng(1)
+        self.flow = 0.0  # [m³/s] tekoucí voda (zvuk potoka)
+        self.flow_x = 0.8
+        self._last_splash = -99.0
 
     def stop(self) -> None:
         self.prog.release()
@@ -470,6 +473,36 @@ class WaterGame(Game):
         self.aux_tex.write(np.dstack([self.wet, self.foam]).astype(np.float32).tobytes())
         self._ripples(hm, dt)
         self._advect_streaks(hm, dt)
+        self._sound(hm)
+
+    # --- zvuk ------------------------------------------------------------------------------------
+    STREAM_FULL = 0.008  # [m³/s] průtok, při kterém potok zní naplno
+    SPLASH_GAP = 2.5  # [s] nejmenší rozestup šplouchnutí
+
+    def _sound(self, hm) -> None:
+        """Déšť podle mraků, potok podle tekoucí vody, hrom při každém blesku."""
+        sfx = self.sfx
+        bw = hm.size[0]
+        k = max((c[3] for c in self.clouds), default=0.0)
+        rain = 0.75 * k
+        x = None
+        if self.clouds:
+            wsum = sum(c[3] for c in self.clouds)
+            x = sum(c[1] * c[3] for c in self.clouds) / max(wsum, 1e-6) / bw
+        if self.raining:
+            rain, x = max(rain, 0.6), (x if k > 0.3 else 0.5)
+        sfx.loop("rain", rain, x=x)
+        stream = min(1.0, self.flow / self.STREAM_FULL) ** 0.6 * 0.7 if self.flow > 2e-5 else 0.0
+        sfx.loop("stream", stream, x=self.flow_x / bw)
+        for sx_, sy_ in self.fx.strikes:
+            sfx.play("thunder", gain=float(self.rng.uniform(0.8, 1.0)), x=sx_ / bw, pitch=float(self.rng.uniform(0.85, 1.1)))
+            # blesk do vody šplouchne (ale ne pokaždé – max. jednou za pár sekund)
+            gh, gw = hm.shape
+            ix = min(gw - 1, max(0, int(sx_ / hm.cell_size[0])))
+            iy = min(gh - 1, max(0, int(sy_ / hm.cell_size[1])))
+            if self.sim is not None and self.sim.depth[iy, ix] > 0.003 and self.t - self._last_splash > self.SPLASH_GAP:
+                self._last_splash = self.t
+                sfx.play("splash", gain=0.6, x=sx_ / bw)
 
     # --- vzhled hladiny (jen vizuální stav) -------------------------------------------------------
     def _surface(self, hm, dt: float) -> None:
@@ -489,6 +522,12 @@ class WaterGame(Game):
         conv *= d > 0.0004
         target = blur3(conv)
         self.foam += (target - self.foam) * min(1.0, dt * 3.0)
+        # pro zvuk: kolik vody teče (průtok přes buňky) a kde (těžiště proudu)
+        q = np.minimum(d, np.float32(0.005)) * sp * (sp > 0.04)  # jen opravdu tekoucí voda, ne klidné jezero
+        qs = float(q.sum())
+        self.flow = qs * cx
+        if qs > 1e-9 and self._xy is not None:
+            self.flow_x = float((q * self._xy[0]).sum() / qs)
 
     def _ripples(self, hm, dt: float) -> None:
         """Kroužky na hladině: kapky dopadlé do vody, úder blesku do vody."""
@@ -648,6 +687,9 @@ class WaterGame(Game):
             self.host.notify("Déšť " + ("zapnut" if self.raining else "vypnut"))
         elif name == "p" and self.sim is not None:
             self.sim.depth += 0.01
+            if self.t - self._last_splash > 0.8:  # povodeň = velké šplouchnutí (při držení klávesy jen občas)
+                self._last_splash = self.t
+                self.sfx.play("splash", gain=1.0, pitch=0.85)
         elif name in ("x", "backspace") and self.sim is not None:
             self.sim.clear()
             if self.wet is not None:
