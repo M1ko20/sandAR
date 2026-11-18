@@ -80,6 +80,11 @@ zbytečné závislosti; config jsou dataclassy + JSON.
 - Ověření: `pytest`, `python -m sandbox snapshot --game <id> --duration <s>` (headless PNG),
   na hardwaru `checkcal` a běh s `--duration N --snapshot-dir DIR`.
 - Font nemá všechny symboly (např. ⚠) – kresli je painterem.
+- Vizuál pro projekci na bílé polystyrenové kuličky (zrno 3–5 mm, plátno ~1,3 mm/px): žádné detaily
+  pod ~5 px a jemné textury (působí jako šum), syté jasné barvy, pohyb a světlo. Záře: `host.glow(síla, práh)`
+  v `render()` po scéně a před texty (ne na světlém sytém terénu – rozzáří celý povrch).
+  Sdílené: `hillshade` (klíčové + protisvětlo + zastínění údolí), `water_shade`, aréna pro dva
+  (`versus.ARENA_GLSL`), efekty předloh (`predloha_fx.py`). Ověřuj vždy obrázkem nad nahrávkou.
 
 ## Bezpečnost na akci
 
