@@ -17,7 +17,7 @@ import numpy as np
 from . import versus as vs
 from .base import Game
 
-FRAG = """
+FRAG = vs.ARENA_GLSL + """
 uniform float u_sea;
 uniform float u_clock;
 uniform float u_active;   // 0 = moře se ještě nekreslí (stavba)
@@ -54,6 +54,7 @@ void main() {
     float shore = 1.0 - smoothstep(0.0, 0.004, abs(d));
     float n = vnoise(pm * 70.0 + u_clock * 1.5);
     c = mix(c, vec3(0.95, 0.98, 1.0), u_active * shore * (0.45 + 0.4 * n));
+    c = vs_arena(c, uv, 0.22);
     f_color = vec4(c, 1.0);
 }
 """
@@ -100,6 +101,8 @@ class IslandFloodGame(Game):
         self.sunk = [False, False]
         self.winner: int | None = None
         self._zones: dict = {}
+        self.arena = vs.Arena()
+        self.sink_fx: list[tuple[float, float, float]] = []  # (x, y [px], čas) – ostrov zmizel pod vodou
 
     # --- logika ------------------------------------------------------------------------------
     def zones(self, hm) -> list[np.ndarray]:
@@ -120,6 +123,8 @@ class IslandFloodGame(Game):
         self.hand_time = self.hand_time + dt if hands else 0.0
         zones = self.zones(hm)
         self.peaks = [vs.zone_peak(hm.heights, hm.hands, z) for z in zones]
+        self.arena.update(dt, self.host.canvas_size)
+        self.arena.phase(self.state, shock=self.state == RISE)
 
         if self.state == READY:
             if self.hand_time >= self.HANDS_TO_START:
@@ -134,12 +139,18 @@ class IslandFloodGame(Game):
             for p in (0, 1):
                 self.area[p] = self.island_area(hm.heights, zones[p], hm.cell_size)
                 self.below[p] = self.below[p] + dt if self.area[p] < self.MIN_AREA else 0.0
+                was = self.sunk[p]
                 self.sunk[p] = self.below[p] >= self.SINK_HOLD
+                if self.sunk[p] and not was and self.peaks[p] is not None:
+                    iy, ix, _ = self.peaks[p]
+                    cw, ch = self.host.canvas_size
+                    self.sink_fx.append(((ix + 0.5) / hm.shape[1] * cw, (iy + 0.5) / hm.shape[0] * ch, self.clock))
             if any(self.sunk) or self.sea >= self.MAX_SEA:
                 self._finish()
         elif self.state == RESULT and self.state_t >= self.RESULT_TIME:
             self.state, self.state_t = READY, 0.0
             self.hand_time = 0.0
+            self.arena.clear_win()
 
     def start_build(self) -> None:
         self.state, self.state_t = BUILD, 0.0
@@ -147,6 +158,7 @@ class IslandFloodGame(Game):
         self.below = [0.0, 0.0]
         self.winner = None
         self.sea = -1.0
+        self.arena.clear_win()
         self.host.notify("Stavte ostrovy!")
 
     def start_rise(self, hm) -> None:
@@ -169,22 +181,52 @@ class IslandFloodGame(Game):
         if self.winner is not None:
             self.score[self.winner] += 1
         self.state, self.state_t = RESULT, 0.0
+        self.arena.win(self.winner, self.host.canvas_size)
 
     # --- kreslení ------------------------------------------------------------------------------
     def render(self) -> None:
         active = self.state in (RISE, RESULT)
+        alarm = [0.0, 0.0]
+        power = [0.55, 0.55]
+        if self.state == RISE:
+            for pl in (0, 1):
+                peak = self.peaks[pl]
+                above = (peak[2] - self.sea) if peak is not None else 0.0
+                alarm[pl] = 1.0 if self.below[pl] > 0 else float(np.clip(1.0 - above / 0.025, 0, 1))
+                power[pl] = 0.3 + 0.7 * float(np.clip(above / 0.04, 0, 1))
+        elif self.state == BUILD and self.BUILD_TIME - self.state_t <= 5:
+            alarm = [0.4, 0.4]
         self.host.draw_fullscreen(self.prog, u_sea=float(self.sea), u_clock=float(self.clock),
-                                  u_active=1.0 if active else 0.0)
+                                  u_active=1.0 if active else 0.0,
+                                  **self.arena.uniforms(self.host.box_size, power, alarm))
         p = self.host.painter
         canvas = self.host.canvas_size
-        vs.draw_divider(p, canvas)
         hm = self.host.heightmap
         if hm is not None and self.state != READY:
             for player, peak in enumerate(self.peaks):
                 if peak is not None and not self.sunk[player]:
                     self._flag(p, hm, player, peak)
+        self._sink_fx(p, canvas)
+        self.arena.draw(p)
+        if self.state == BUILD:
+            for player in (0, 1):
+                vs.draw_countdown(p, canvas, player, self.BUILD_TIME - self.state_t, self.BUILD_TIME)
         for player in (0, 1):
             self._hud(p, canvas, player)
+
+    def _sink_fx(self, p, canvas) -> None:
+        """Ostrov se potopil: víry a bubliny rozbíhající se od posledního vrcholu."""
+        ch = canvas[1]
+        self.sink_fx = [fx for fx in self.sink_fx if self.clock - fx[2] < 2.0]
+        for x, y, t0 in self.sink_fx:
+            f = (self.clock - t0) / 2.0
+            for k in range(3):
+                g = min(1.0, f * 1.4 + k * 0.15)
+                p.circle(x, y, ch * (0.02 + 0.16 * g), (0.75, 0.92, 1.0, (1 - g) * 0.9), width=max(6, ch / 110))
+            ang = np.arange(8) * np.pi / 4 + f * 3
+            rr = ch * (0.03 + 0.12 * f)
+            for a in ang:
+                p.circle(x + rr * math.cos(a), y + rr * math.sin(a), ch * 0.012 * (1 - f) + 3, (1, 1, 1, 1 - f))
 
     def _flag(self, p, hm, player: int, peak) -> None:
         iy, ix, _ = peak
@@ -199,6 +241,12 @@ class IslandFloodGame(Game):
         low = np.array([x + away * pole * 0.55, y])
         wave = math.sin(self.clock * 6) * s * 0.1
         tip = np.array([x + away * (pole * 0.78 + wave), y + side * s * 1.1])
+        danger = self.state == RISE and (self.below[player] > 0 or self.peaks[player] is not None
+                                         and self.peaks[player][2] - self.sea < 0.01)
+        if danger:  # SOS: pulzující červený prstenec kolem vrcholu
+            ph = (self.clock * 1.8) % 1.0
+            p.circle(x, y, s * (0.6 + 1.6 * ph), (1.0, 0.25, 0.15, 1 - ph), width=max(6, ch / 100))
+        vs.draw_glow_disc(p, x, y, s * 1.6, vs.COLORS[player][:3] + (0.35,))
         p.circle(x, y, s * 0.25, (0, 0, 0, 0.6))
         p.polyline([(x, y), tuple(top)], (0.1, 0.06, 0.02, 1), width=max(4, s * 0.14))
         flag = np.array([top, low, tip])

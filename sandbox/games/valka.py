@@ -23,7 +23,7 @@ from ..render.fx import WaterLayer
 from .base import Game
 from .mesto import draw_house
 
-FRAG = """
+FRAG = vs.ARENA_GLSL + """
 uniform sampler2D u_water;
 uniform sampler2D u_vel;
 uniform float u_clock;
@@ -40,6 +40,7 @@ void main() {
     vec2 v = texture(u_vel, uv).rg;
     float foam = clamp((length(v) - 0.10) / 0.25, 0.0, 1.0) * (1.0 - smoothstep(0.002, 0.010, w)) * 0.55;
     c = water_shade(c, uv, w, v, foam).rgb;
+    c = vs_arena(c, uv, 0.22);
     f_color = vec4(c, 1.0);
 }
 """
@@ -87,6 +88,7 @@ class WaterWarGame(Game):
         self.score = [0, 0]
         self._new_round_pending = True
         self.phase, self.phase_t = PREP, 0.0
+        self.arena = vs.Arena()
 
     def stop(self) -> None:
         self.prog.release()
@@ -115,6 +117,7 @@ class WaterWarGame(Game):
         self.winner = None
         self.phase, self.phase_t = PREP, 0.0
         self._new_round_pending = False
+        self.arena.clear_win()
 
     def update(self, hm, dt: float) -> None:
         if self.sim is None or self.sim.depth.shape != hm.shape:
@@ -140,6 +143,8 @@ class WaterWarGame(Game):
             self._check_end()
         elif self.phase == RESULT and self.phase_t >= self.RESULT_TIME:
             self._new_round(hm)
+        self.arena.update(dt, self.host.canvas_size)
+        self.arena.phase(self.phase, shock=self.phase == FLOOD)
         sim.advance(hm.heights, dt, 9.81)
         eco.soak(sim.depth, (self.INFILTRATION if self.phase == FLOOD else 0.0006) * dt)
         assert self.tex is not None
@@ -160,15 +165,24 @@ class WaterWarGame(Game):
         if self.winner is not None:
             self.score[self.winner] += 1
         self.phase, self.phase_t = RESULT, 0.0
+        self.arena.win(self.winner, self.host.canvas_size)
 
     # --- kreslení ------------------------------------------------------------------------------
     def render(self) -> None:
         if self.tex is None or not self.tex.ready:
             return
-        self.host.draw_fullscreen(self.prog, **self.tex.uniforms(1), u_clock=float(self.clock))
+        alarm = [0.0, 0.0]
+        if self.phase == FLOOD:
+            for pl in (0, 1):
+                n = max(1, len(self.villages[pl]))
+                alarm[pl] = float(np.clip(1.0 - (self.dry(pl) - 1) / max(1, n - 1), 0, 1)) ** 1.5
+        elif self.phase == PREP and self.PREP_TIME - self.phase_t <= 5:
+            alarm = [0.5, 0.5]
+        power = [0.4 + 0.6 * self.dry(pl) / max(1, len(self.villages[pl])) for pl in (0, 1)]
+        self.host.draw_fullscreen(self.prog, **self.tex.uniforms(1), u_clock=float(self.clock),
+                                  **self.arena.uniforms(self.host.box_size, power, alarm))
         p = self.host.painter
         canvas = self.host.canvas_size
-        vs.draw_divider(p, canvas)
         cw, ch = canvas
         bw, bd = self.host.box_size
         sx, sy = cw / bw, ch / bd
@@ -177,10 +191,29 @@ class WaterWarGame(Game):
             if village:
                 vx = sum(h.x for h in village) / len(village) * sx
                 vy = sum(h.y for h in village) / len(village) * sy
-                p.circle(vx, vy, 0.11 * sx, vs.COLORS[player][:3] + (0.9,), width=max(4, ch / 150))
+                col = vs.COLORS[player]
+                vs.draw_glow_disc(p, vx, vy, 0.15 * sx, col[:3] + (0.30,))
+                # štít vesnice: rotující obloukové segmenty v barvě týmu
+                ang0 = self.clock * (0.8 if player == 0 else -0.8)
+                arcs = []
+                for k in range(3):
+                    a = ang0 + k * 2 * math.pi / 3 + np.linspace(0, 1.6, 12)
+                    arcs.append(np.stack([vx + 0.11 * sx * np.cos(a), vy + 0.11 * sx * np.sin(a)], 1))
+                for arc in arcs:
+                    p.polyline(arc, col[:3] + (0.95,), width=max(7, ch / 90))
+                p.circle(vx, vy, 0.11 * sx, col[:3] + (0.45,), width=max(3, ch / 220))
             for h in village:
                 draw_house(p, h, sx, sy, self.clock, saved_ring=self.phase == RESULT,
                            ring_color=vs.COLORS[player])
+                if h.flooded and self.clock - h.flooded_at < 1.5:  # zatopení: modrobílý rozstřik
+                    f = (self.clock - h.flooded_at) / 1.5
+                    hx, hy = h.x * sx, h.y * sy
+                    p.circle(hx, hy, 0.02 * sx + 0.09 * sx * f, (0.7, 0.9, 1.0, 1 - f), width=max(6, ch / 110))
+                    p.circle(hx, hy, 0.01 * sx + 0.05 * sx * f, (1, 1, 1, (1 - f) * 0.8), width=max(4, ch / 160))
+        self.arena.draw(p)
+        if self.phase == PREP:
+            for player in (0, 1):
+                vs.draw_countdown(p, canvas, player, self.PREP_TIME - self.phase_t, self.PREP_TIME)
         for player in (0, 1):
             self._hud(p, canvas, player)
 
@@ -193,6 +226,11 @@ class WaterWarGame(Game):
                 f = (self.clock * 0.6 + k / 3) % 1.0
                 p.circle(x, y, r * (0.6 + 1.4 * f), (0.3, 0.8, 1.0, 1.0 - f), width=max(3, 0.006 * sx))
         pulse = 0.5 + 0.5 * math.sin(self.clock * 5)
+        vs.draw_glow_disc(p, x, y, r * (2.4 + 0.4 * pulse), (0.3, 0.75, 1.0, 0.55))
+        if self.phase == FLOOD:  # tryskající pramen: vlny ven
+            for k in range(3):
+                f = (self.clock * 1.4 + k / 3) % 1.0
+                p.circle(x, y, r * (0.7 + 1.8 * f), (0.75, 0.95, 1.0, 0.9 * (1 - f)), width=max(5, 0.008 * sx))
         p.circle(x, y, r * 0.6, (0.05, 0.35, 0.95, 0.95))
         p.circle(x, y, r * (0.6 + 0.1 * pulse), (1, 1, 1, 0.9), width=max(2, 0.004 * sx))
         d = r * 0.3

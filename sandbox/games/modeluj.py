@@ -24,18 +24,24 @@ import numpy as np
 import cv2
 
 from ..render import hud
+from . import predloha_fx as fx
 from . import versus as vs
 from .base import Game
 from .targets import BUILTIN, Score, Target, evaluate, evaluate_shape, half_layout
 
-FRAG = """
+FRAG = vs.ARENA_GLSL + fx.HINT_GLSL + """
 uniform sampler2D u_target;
 uniform sampler2D u_mask;
+uniform sampler2D u_halo;
 uniform int u_hint;
 uniform int u_split;
 uniform float u_tol;
 uniform vec2 u_offset;    // posun hladiny (levá půlka / celé, pravá půlka)
 uniform vec2 u_success;   // 0..1 zelené orámování (levá / celé, pravá)
+uniform vec2 u_cel;       // [s] od úspěchu (levá / celé, pravá), < 0 = nic
+uniform vec4 u_center;    // uv středu hlavní části (levá / celé: xy, pravá: zw)
+
+const float PRED_CELL = 0.075;  // [m] mřížka symbolů + / −
 
 void main() {
     vec2 uv = v_uv;
@@ -51,28 +57,37 @@ void main() {
     float cur = contour_line(h, u_contour_interval, 1.2);
     c = mix(c, vec3(0.45), cur * 0.55);
     if (u_hint == 1) {
-        float k = clamp((abs(d) - 0.5 * u_tol) / (2.0 * u_tol), 0.0, 1.0);
-        vec3 tint = d < 0.0 ? vec3(1.0, 0.12, 0.08) : vec3(0.10, 0.35, 1.0);
-        c = mix(c, tint, k * 0.9);
-        float good = 1.0 - smoothstep(0.5 * u_tol, u_tol, abs(d));
-        c = mix(c, vec3(0.15, 0.85, 0.30), good * 0.55);
+        c = pred_hint(c, d, u_tol);
     }
     // vrstevnice předlohy (silné, hnědé, hlavní ještě silnější)
     float tl = contour_line(t, u_contour_interval, 2.6);
     float tm = contour_line(t, u_contour_interval * float(u_major_every), 4.0);
     c = mix(c, vec3(0.30, 0.13, 0.02), max(tl, tm) * m);
+    if (u_hint == 1) {  // + / − tam, kde je chyba největší
+        vec2 cu = pred_cell(uv, PRED_CELL);
+        if (u_split == 1 && (cu.x > 0.5) != (right == 1)) cu.x = right == 1 ? 0.5001 : 0.4999;
+        float dc = height_at(cu) - (sample_bicubic(u_target, cu) + off);
+        c = pred_symbol(c, uv, cu, dc, texture(u_mask, cu).r, u_tol);
+    }
     // okolí hlavní části je ztmavené – tam na tvaru nezáleží
-    vec3 outside = vec3(0.10, 0.11, 0.14) * mix(0.6, 1.4, shade);
+    vec3 outside = vec3(0.05, 0.08, 0.14) * mix(0.6, 1.5, shade);
     c = mix(outside, c, smoothstep(0.35, 0.65, m));
-    float medge = 1.0 - smoothstep(0.0, 2.0 * fwidth(m) + 1e-4, abs(m - 0.5));
-    float dash = step(0.45, fract((uv.x * u_box.x + uv.y * u_box.y) * 18.0 - u_time * 0.4));
-    c = mix(c, vec3(1.0, 0.95, 0.6), medge * dash);
+    c = pred_holo(c, uv, m, texture(u_halo, uv).r);
+    float cel = right == 1 ? u_cel.y : u_cel.x;
+    vec2 cen = right == 1 ? u_center.zw : u_center.xy;
+    c = pred_celebrate(c, uv, m, cel, cen);
     // orámování při úspěchu
     float s = right == 1 ? u_success.y : u_success.x;
     float x0 = u_split == 1 ? (right == 1 ? 0.5 : 0.0) : 0.0;
     float x1 = u_split == 1 ? (right == 1 ? 1.0 : 0.5) : 1.0;
     float edge = min(min(uv.x - x0, x1 - uv.x) * u_box.x, min(uv.y, 1.0 - uv.y) * u_box.y);
     c = mix(c, vec3(0.2, 1.0, 0.3), s * (1.0 - smoothstep(0.02, 0.04, edge)));
+    c += vec3(0.2, 1.0, 0.3) * s * 0.5 * exp(-edge / 0.05);
+    // dva hráči: aréna (záře půlek jen mimo hlavní část, ať nápověda zůstane čistá)
+    if (u_split == 1) {
+        float free = 1.0 - smoothstep(0.2, 0.5, m);
+        c = vs_arena_k(c, uv, 0.25 * free, free);
+    }
     f_color = vec4(c, 1.0);
 }
 """
@@ -108,16 +123,22 @@ class ModelRaceGame(Game):
         self.targets: list[Target] = list(BUILTIN)
         self.tex = None
         self.mask_tex = None
+        self.halo_tex = None
+        self.centers = (0.5, 0.5, 0.5, 0.5)
+        self.arena = vs.Arena()
+        self.confetti = vs.Confetti()
+        self._offs = [fx.Smooth(5.0), fx.Smooth(5.0)]
+        self._shown = [fx.Smooth(5.0), fx.Smooth(5.0)]
         self.grid: np.ndarray | None = None
         self.mask: np.ndarray | None = None
         self.reset()
 
     def stop(self) -> None:
         self.prog.release()
-        for tex in (self.tex, self.mask_tex):
+        for tex in (self.tex, self.mask_tex, self.halo_tex):
             if tex is not None:
                 tex.release()
-        self.tex = self.mask_tex = None
+        self.tex = self.mask_tex = self.halo_tex = None
 
     def reset(self) -> None:
         self.t = 0.0
@@ -160,12 +181,21 @@ class ModelRaceGame(Game):
         if self.grid is not None and self.grid.shape == hm.shape:
             return
         self.grid, self.mask = self.build_grid(hm.shape, hm.size)
-        for tex in (self.tex, self.mask_tex):
+        for tex in (self.tex, self.mask_tex, self.halo_tex):
             if tex is not None:
                 tex.release()
         self.tex = self.host.float_texture((hm.shape[1], hm.shape[0]), self.grid)
         soft = cv2.GaussianBlur(self.mask.astype(np.float32), (0, 0), 1.5)
         self.mask_tex = self.host.float_texture((hm.shape[1], hm.shape[0]), soft)
+        cell = hm.size[0] / hm.shape[1]
+        self.halo_tex = self.host.float_texture((hm.shape[1], hm.shape[0]), fx.halo_mask(self.mask, cell))
+        if self.players == 1:
+            self.centers = fx.mask_center(self.mask) * 2
+        else:
+            gw, half = hm.shape[1], hm.shape[1] // 2
+            lx, ly = fx.mask_center(self.mask[:, :half])
+            rx, ry = fx.mask_center(self.mask[:, half:])
+            self.centers = (lx * half / gw, ly, (half + rx * (gw - half)) / gw, ry)
 
     def evaluate(self, heights: np.ndarray) -> list[Score | None]:
         assert self.grid is not None
@@ -185,6 +215,9 @@ class ModelRaceGame(Game):
         self._ensure_grid(hm)
         self.t += dt
         self.state_t += dt
+        self.arena.update(dt, self.host.canvas_size)
+        self.arena.phase(self.state, shock=self.state == ROUND and self.players == 2)
+        self.confetti.update(dt)
         hands = hm.has_hands
         self.hand_time = self.hand_time + dt if hands else 0.0
         if self.t >= self._next_eval:
@@ -218,11 +251,18 @@ class ModelRaceGame(Game):
         self.state, self.state_t = ROUND, 0.0
         self.good_since = [None, None]
         self.winner = None
+        self.arena.clear_win()
 
     def _finish(self, winner: int | None) -> None:
         self.winner = winner
         self.finish_time = self.state_t
         self.state, self.state_t = RESULT, 0.0
+        canvas = self.host.canvas_size
+        if self.players == 2:
+            self.arena.win(winner, canvas)
+        else:  # jeden hráč: konfety z hlavní části předlohy
+            self.confetti.burst(self.centers[0] * canvas[0], self.centers[1] * canvas[1], 220, fx.CONFETTI,
+                                canvas[1] * 1.2)
 
     def next_target(self, step: int = 1) -> None:
         self.index = (self.index + step) % len(self.targets)
@@ -230,27 +270,39 @@ class ModelRaceGame(Game):
         self.state, self.state_t = READY, 0.0
         self.hand_time = 0.0
         self.scores = [None, None]
+        self.arena.clear_win()
 
     # --- kreslení ------------------------------------------------------------------------------
     def render(self) -> None:
         if self.tex is None:
             return
         tol = self.SOLO_TOL if self.players == 1 else self.host.settings.challenge.tolerance
-        offs = [s.offset if s is not None else 0.0 for s in self.scores]
+        offs = [self._offs[i](s.offset if s is not None else 0.0, self.t) for i, s in enumerate(self.scores)]
         glow = [0.0, 0.0]
+        cel = [-1.0, -1.0]
         for p in range(self.players):
             if self.state == RESULT and (self.winner == p or (self.players == 1 and self.winner is not None)):
                 glow[p] = 0.6 + 0.4 * math.sin(self.state_t * 6)
+                cel[p] = self.state_t
             elif self.good_since[p] is not None and self.state == ROUND:
-                glow[p] = 0.5
+                glow[p] = 0.5 + 0.2 * math.sin(self.t * 8)  # drží shodu – rámeček „nabíjí“
+        power = [0.5, 0.5]
+        if self.players == 2 and self.state == ROUND:
+            for i, s in enumerate(self.scores):
+                power[i] = 0.3 + 0.7 * float(np.clip((s.score if s else 0.0) / self.success, 0, 1))
         self.host.draw_fullscreen(self.prog, u_target=(self.tex, 1), u_mask=(self.mask_tex, 2),
-                                  u_hint=int(self.show_hint),
+                                  u_halo=(self.halo_tex, 3), u_hint=int(self.show_hint),
                                   u_split=int(self.players == 2), u_tol=float(tol), u_offset=tuple(offs),
-                                  u_success=tuple(glow))
+                                  u_success=tuple(glow), u_cel=tuple(cel), u_center=self.centers,
+                                  **self.arena.uniforms(self.host.box_size, power))
         p = self.host.painter
         canvas = self.host.canvas_size
+        self.arena.draw(p)
+        self.confetti.draw(p)
         if self.players == 2:
-            vs.draw_divider(p, canvas)
+            if self.state == ROUND:
+                for player in (0, 1):
+                    vs.draw_countdown(p, canvas, player, self.DUEL_LIMIT - self.state_t, self.DUEL_LIMIT)
             for player in (0, 1):
                 self._hud_duel(p, canvas, player)
         else:
@@ -267,7 +319,7 @@ class ModelRaceGame(Game):
         size = vs.text_size(canvas)
         small = vs.text_size(canvas, 0.75)
         s = self.scores[player]
-        pct = f"{s.score:.0f} %" if s is not None else "–"
+        pct = f"{self._shown[player](s.score, self.t):.0f} %" if s is not None else "–"
         if self.state == READY:
             vs.player_text(p, canvas, player, f"Předloha: {self.target.name}", 0.035, size, color=(1, 1, 1, 1),
                            background=(0, 0, 0, 0.55), padding=size * 0.2)
