@@ -11,6 +11,7 @@ zmizí a zůstane čistá fotka na správně tvarovaném terénu.
 
 from __future__ import annotations
 
+import math
 import time
 
 import cv2
@@ -31,17 +32,49 @@ uniform float u_tol;
 uniform float u_offset;
 uniform float u_scale;
 uniform float u_reveal;   // 0..1: úspěch – nápověda zmizí, fotka se rozzáří
+uniform float u_since;    // [s] od úspěchu (záblesk, světelný přejezd, jiskry); < 0 = není úspěch
+
+float krajina_hash(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+// zlaté jiskry stoupající nad krajinou při odhalení (velké kulaté body, ne šum)
+float krajina_sparks(vec2 pm, float t) {
+    float cell = 0.06;
+    vec2 q = pm + vec2(0.0, t * 0.035);            // stoupají (k menšímu y)
+    vec2 id = floor(q / cell);
+    vec2 f = q / cell - id;
+    float r = krajina_hash(id);
+    vec2 c = vec2(0.2 + 0.6 * krajina_hash(id + 7.1), 0.2 + 0.6 * krajina_hash(id + 3.7));
+    float tw = 0.5 + 0.5 * sin(t * (2.0 + 3.0 * r) + r * 40.0);
+    float d = length((f - c) * cell);              // [m]
+    return step(0.70, r) * tw * (1.0 - smoothstep(0.004, 0.008, d));
+}
 
 void main() {
     vec2 uv = v_uv;
+    vec2 pm = uv * u_box;
     float h = height_at(uv);
-    vec3 c = texture(u_photo, uv).rgb;
-    float shade = hillshade(uv, 3.0);
-    c *= mix(0.55, 1.25, shade);                         // reliéf písku dává fotce hloubku
+    vec3 c = pow(texture(u_photo, uv).rgb, vec3(0.76));   // zvednuté stíny (tmavý les na drti zaniká)
+    // barevné podání: sytější, kontrastnější fotka (projekce na bílé drti jinak vybledne)
+    float lum0 = dot(c, vec3(0.3, 0.55, 0.15));
+    float sat = 1.25 + 0.25 * u_reveal;
+    c = max(mix(vec3(lum0), c, sat), 0.0);
+    c = mix(c, c * c * (3.0 - 2.0 * c), 0.45 + 0.25 * u_reveal);   // S-křivka
+    // reliéf písku dává fotce hloubku: teplé slunce na svazích, chladné stíny v údolích
+    float shade = hillshade(uv, 3.2 + 1.3 * u_reveal);   // při odhalení reliéf „vystoupí“
+    vec3 light = mix(vec3(0.55, 0.60, 0.85), vec3(1.38, 1.24, 1.02), shade);
+    c *= light;
+    float cav = cavity(uv);
+    c *= 1.0 - clamp(cav / 0.010, 0.0, 1.0) * 0.22;                // hlubší údolí tmavší
+    c += vec3(1.0, 0.85, 0.55) * pow(shade, 5.0) * 0.22;           // zlatý lesk na hřebenech
     float t = sample_bicubic(u_target, uv) * u_scale + u_offset;
     float d = h - t;
     if (u_hint == 1) {
         float k = clamp((abs(d) - 0.6 * u_tol) / (2.0 * u_tol), 0.0, 1.0) * (1.0 - u_reveal);
+        k *= 0.88 + 0.12 * sin(u_time * 2.4);                     // nápověda pomalu „dýchá“
         vec3 tint = d < 0.0 ? vec3(1.0, 0.12, 0.06) : vec3(0.10, 0.35, 1.0);
         float lum = dot(c, vec3(0.3, 0.55, 0.15));
         c = mix(c, tint * (0.8 + 0.5 * lum), k * 0.6);
@@ -50,7 +83,23 @@ void main() {
         float line = contour_line(t, u_contour_interval, 1.6);
         c = mix(c, vec3(1.0, 0.97, 0.85), line * 0.55 * (1.0 - u_reveal));
     }
+    // mírná vinětace – pozornost do středu (při odhalení zesílí jako ve filmu)
+    vec2 vq = (uv - 0.5) * vec2(1.0, 1.2);
+    c *= 1.0 - (0.18 + 0.12 * u_reveal) * smoothstep(0.25, 0.75, dot(vq, vq) * 2.0);
     c *= 1.0 + 0.15 * u_reveal;
+    if (u_since >= 0.0) {
+        // záblesk při odhalení
+        float flash = exp(-u_since * 4.0) * smoothstep(0.0, 0.06, u_since);
+        c = mix(c, vec3(1.0, 0.97, 0.88), flash * 0.75);
+        // světelný přejezd šikmo přes krajinu (jako odlesk na fotce)
+        float s = uv.x * 0.8 + (1.0 - uv.y) * 0.45;
+        float sc = -0.3 + u_since * 0.9;
+        float band = exp(-pow((s - sc) / 0.045, 2.0)) * (1.0 - smoothstep(1.4, 2.4, u_since));
+        c += vec3(1.0, 0.86, 0.55) * band * (0.6 + 0.3 * shade);
+        // zlaté jiskry
+        float sp = krajina_sparks(pm, u_time) * u_reveal * (0.45 + 0.55 * exp(-u_since / 3.0));
+        c = mix(c, vec3(1.0, 0.88, 0.45), sp);
+    }
     f_color = vec4(c, 1.0);
 }
 """
@@ -163,14 +212,23 @@ class LandscapeGame(Game):
             hud.label(p, "Obsluha: python -m sandbox ortofoto (potřebuje internet)", cw / 2, ch / 2 + size,
                       hud.size(canvas, 0.75), bold=False)
             return
-        reveal = 0.0
+        reveal, since = 0.0, -1.0
         if self.success_since is not None:
-            reveal = min(1.0, (time.monotonic() - self.success_since) / 1.5)
+            since = time.monotonic() - self.success_since
+            reveal = min(1.0, since / 1.5)
         r = self.result
         self.host.draw_fullscreen(self.prog, u_photo=(self.photo_tex, 1), u_target=(self.target_tex, 2),
                                   u_hint=int(self.hint), u_lines=int(self.lines), u_tol=self.TOL,
                                   u_offset=r.offset if r else 0.0, u_scale=r.scale if r else 1.0,
-                                  u_reveal=float(reveal))
+                                  u_reveal=float(reveal), u_since=float(since))
+        if since >= 0:
+            # filmový moment: záře, zatmívací pruhy nahoře a dole (cinemascope)
+            self.host.glow(0.3 + 0.8 * math.exp(-since * 1.5), 0.86)
+            k = min(1.0, since / 0.9)
+            k = 1 - (1 - k) ** 3
+            bar_h = ch * 0.085 * k
+            p.rect(0, 0, cw, bar_h, (0, 0, 0, 0.88))
+            p.rect(0, ch - bar_h, cw, bar_h, (0, 0, 0, 0.88))
         small = hud.size(canvas, 0.75)
         hud.label(p, place.name, size * 0.3, size * 0.25, size, anchor="tl", color=hud.YELLOW)
         hud.label(p, f"{place.min_m:.0f}–{place.max_m:.0f} m n. m. · výřez " + f"{place.width_m / 1000:.1f}".replace(".", ",") + " km",

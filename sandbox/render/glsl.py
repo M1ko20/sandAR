@@ -145,7 +145,8 @@ float hillshade(vec2 uv, float exaggeration) {
     vec3 n = normalize(vec3(-g.x, -g.y, 1.0));
     float key = clamp(dot(n, normalize(vec3(-1.0, -1.2, 1.6))), 0.0, 1.0);
     float fill = clamp(dot(n, normalize(vec3(1.0, 0.8, 1.2))), 0.0, 1.0);
-    float ao = 1.0 - clamp(cavity(uv) / 0.012, 0.0, 1.0) * 0.35 + clamp(-cavity(uv) / 0.012, 0.0, 1.0) * 0.08;
+    float cv = cavity(uv);
+    float ao = 1.0 - clamp(cv / 0.012, 0.0, 1.0) * 0.35 + clamp(-cv / 0.012, 0.0, 1.0) * 0.08;
     return clamp((0.82 * key + 0.18 * fill) * ao * 1.04, 0.0, 1.0);
 }
 
