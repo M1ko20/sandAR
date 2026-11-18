@@ -133,6 +133,7 @@ class LandscapeGame(Game):
         self.best = 0.0
         self._next_eval = 0.0
         self._built_for: tuple | None = None
+        self._last_tada = -1e9
 
     def stop(self) -> None:
         self.prog.release()
@@ -183,6 +184,8 @@ class LandscapeGame(Game):
             self._build(hm)
         if self.grid is None:
             return
+        # tiché prostředí: les; po odhalení krajina „ožije“ (o něco hlasitější)
+        self.sfx.loop("forest", 0.20 if self.success_since is not None else 0.11)
         now = time.monotonic()
         if now < self._next_eval:
             return
@@ -192,6 +195,10 @@ class LandscapeGame(Game):
         if self.result.score >= self.SUCCESS:
             if self.success_since is None:
                 self.success_since = now
+                if now - self._last_tada > 8.0:  # zaváhání kolem hranice nespouští zvuk znovu
+                    self._last_tada = now
+                    self.sfx.play("tada", 0.9)
+                    self.sfx.play("sparkle", 0.6)
         elif self.result.score < self.SUCCESS - 8:  # hystereze, ať úspěch neblikne
             self.success_since = None
 
@@ -259,6 +266,7 @@ class LandscapeGame(Game):
     def key(self, name: str, shift: bool = False) -> bool:
         if name in ("left", "right") and self.places:
             self.index = (self.index + (1 if name == "right" else -1)) % len(self.places)
+            self.sfx.play("chime", 0.4, pitch=1.1 if name == "right" else 0.95)
             self.host.notify(f"Místo: {self.places[self.index].name}")
         elif name == "m":
             self.hint = not self.hint

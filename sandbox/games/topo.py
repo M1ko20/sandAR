@@ -243,16 +243,21 @@ class TopoGame(Game):
         self.labels: list[tuple] = []
         self._next_labels = 0.0
         self._lo, self._hi = -0.02, 0.08
+        self._water = 0.0  # podíl plochy pod hladinou (pro zvuk moře)
 
     def stop(self) -> None:
         self.prog.release()
 
     def update(self, hm, dt: float) -> None:
+        # zvuk: tichý vítr nad krajinou, u větší vodní plochy k tomu slabý příboj
+        self.sfx.loop("wind", 0.10)
+        self.sfx.loop("sea", 0.16 * min(1.0, self._water * 5.0))
         now = self.host.time
         if now < self._next_labels:
             return
         self._next_labels = now + 0.7
         m = self.host.settings.map
+        self._water = float(np.mean(hm.heights[::4, ::4] < m.water_level))
         lo, hi = np.percentile(hm.heights, [2, 99.5])
         self._lo, self._hi = float(lo), float(hi)
         levels = [lv for lv in major_levels(m) if m.water_level < lv]
@@ -312,6 +317,7 @@ class TopoGame(Game):
             m.water_level += 0.005 if name == "up" else -0.005
             m.water_level = min(max(m.water_level, m.elevation_min), m.elevation_max)
             self._next_labels = 0.0
+            self.sfx.play("bubble", 0.35, pitch=1.1 if name == "up" else 0.9)
             self.host.notify(f"Hladina vody: {self.host.altitude(m.water_level):.0f} m n. m.")
         elif name in ("left", "right"):
             i = min(range(len(INTERVALS)), key=lambda j: abs(INTERVALS[j] - m.contour_interval))

@@ -139,6 +139,7 @@ class MapGame(Game):
         self.labels: list[tuple] = []
         self._next_peak_update = 0.0
         self._next_labels = 0.0
+        self._next_peak_sound = 0.0
 
     def stop(self) -> None:
         self.prog.release()
@@ -158,9 +159,16 @@ class MapGame(Game):
                                 radius=max(4, gw // 16))
         r2 = (max(4, gw // 16)) ** 2
         born = []
+        new_x = None
         for iy, ix, _ in self.peaks:
             prev = [b for b in self._born if (b[0] - ix) ** 2 + (b[1] - iy) ** 2 < r2]
             born.append((ix, iy, prev[0][2] if prev else now))
+            if not prev and self._born:
+                new_x = (ix + 0.5) / gw
+        # mapa je tichá: jen jemné ťuknutí, když se objeví nová kóta (nejvýš jednou za 2 s)
+        if new_x is not None and now >= self._next_peak_sound:
+            self._next_peak_sound = now + 2.0
+            self.sfx.play("tick", 0.35, x=new_x)
         self._born = born
 
     # --- kreslení -----------------------------------------------------------------
@@ -289,6 +297,7 @@ class MapGame(Game):
         elif name in ("up", "down"):
             m.water_level += 0.005 if name == "up" else -0.005
             self._next_labels = 0.0
+            self.sfx.play("bubble", 0.3, pitch=1.1 if name == "up" else 0.9)
             self.host.notify(f"Hladina vody: {self.host.altitude(m.water_level):.0f} m n. m.")
         else:
             return False
