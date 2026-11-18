@@ -128,8 +128,8 @@ def _parts(key: str, t: float) -> list[tuple[np.ndarray, tuple]]:
 
 
 SCALE = 1.5  # zvířata větší než skutečná délka v metrech – ať jsou ze 2 m vidět
-HALO = 1.22  # světlý lem kolem siluety (zvíře se odliší od lesa, vody i skal)
-HALO_COLOR = (1.0, 0.97, 0.86, 0.75)
+HALO = 1.08  # světlý lem kolem siluety (zvíře se odliší od lesa, vody i skal)
+HALO_COLOR = (1.0, 0.97, 0.86, 0.55)
 FLYING_SHADOW = {"ptak": 0.9, "orel": 1.3, "motyl": 0.35}
 
 

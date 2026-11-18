@@ -70,13 +70,8 @@ void main() {
         float cap = (1.0 - smoothstep(0.0, 0.012, below)) * exp(-d * d / (0.12 * 0.12));
         vec3 col = u_pit == 1 ? vec3(0.2, 0.85, 1.0) : vec3(1.0, 0.35, 0.12);
         c = mix(c, col, cap * (0.35 + 0.2 * sin(u_time * 4.0)));
-        // kruhy stoupají od vrcholu jako „signál“
-        float ring = pow(0.5 + 0.5 * sin((d / 0.05 - u_time * 1.2) * 6.2831853), 8.0);
-        c += col * ring * exp(-d / 0.08) * 0.35;
-        // oslava rekordu: zlaté vlny přes celou bednu
-        float wave = pow(0.5 + 0.5 * sin((d / 0.22 - u_time * 1.2) * 6.2831853), 10.0);
+        // oslava rekordu: bedna zezlátne
         c = mix(c, c * vec3(1.15, 1.05, 0.7) + vec3(0.1, 0.07, 0.0), u_gold * 0.4);
-        c += vec3(1.0, 0.8, 0.25) * wave * u_gold * 0.4;
     }
     vec2 e = min(pm, u_box - pm);
     float edge = 1.0 - smoothstep(0.0, 0.09, min(e.x, e.y));

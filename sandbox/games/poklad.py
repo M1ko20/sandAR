@@ -69,10 +69,8 @@ void main() {
         }
     }
     if (u_victory > 0.0) {
-        // vítězství: přes celou mapu přejíždí zlatý lesk
-        float sweep = exp(-pow((pm.x + pm.y * 0.6 - mod(u_time * 0.9, 3.2) + 0.5) / 0.12, 2.0));
+        // vítězství: celá mapa zezlátne
         c = mix(c, c * vec3(1.15, 1.0, 0.7) + vec3(0.18, 0.12, 0.0), u_victory * 0.5);
-        c += vec3(1.0, 0.85, 0.4) * sweep * u_victory * 0.45;
     }
     f_color = vec4(c, 1.0);
 }
@@ -130,9 +128,13 @@ def surface_level(heights: np.ndarray, size: tuple[float, float], x: float, y: f
 
 
 def place_treasures(heights: np.ndarray, size: tuple[float, float], n: int, rng: np.random.Generator,
-                    cover: tuple[float, float] = (0.025, 0.04), margin: float = 0.1, min_dist: float = 0.18,
-                    floor: float = -0.07, forbid: np.ndarray | None = None) -> list[Treasure]:
-    """Rozmístí poklady na vyvýšená místa tak, aby se k nim muselo kopat ``cover`` metrů písku."""
+                    cover: tuple[float, float] = (0.015, 0.03), margin: float = 0.1, min_dist: float = 0.18,
+                    floor: float = -0.07, forbid: np.ndarray | None = None,
+                    bottom: float | None = None) -> list[Treasure]:
+    """Rozmístí poklady na vyvýšená místa tak, aby se k nim muselo kopat ``cover`` metrů písku.
+
+    ``bottom`` = nejnižší místo, kam se v bedně zatím dalo vykopat (dno) – poklad nikdy není níž,
+    jinak by ho nešlo vykopat."""
     gh, gw = heights.shape
     W, D = size
     xs = (np.arange(gw) + 0.5) / gw * W
@@ -161,18 +163,25 @@ def place_treasures(heights: np.ndarray, size: tuple[float, float], n: int, rng:
     out = []
     for i, (x, y) in enumerate(pts):
         z = surface_level(heights, size, x, y) - float(rng.uniform(*cover))
+        if bottom is not None:
+            z = max(z, bottom + 0.008)
         out.append(Treasure(x, y, z, kind=i % 3))
     return out
 
 
 def update_reveals(treasures: list[Treasure], heights: np.ndarray, size: tuple[float, float], dt: float,
-                   now: float, eps: float = 0.004, hold_time: float = 0.3) -> list[Treasure]:
-    """Odkryje poklady, nad kterými je povrch aspoň hold_time s níž než z + eps. Vrací nově nalezené."""
+                   now: float, eps: float = 0.004, hold_time: float = 0.3,
+                   bottom: float | None = None) -> list[Treasure]:
+    """Odkryje poklady, nad kterými je povrch aspoň hold_time s níž než z + eps. Vrací nově nalezené.
+
+    Kdo vykope až na dno bedny (``bottom`` = nejnižší místo, které kdy bylo vidět), poklad najde
+    vždycky – i kdyby byl kvůli tenké vrstvě písku zakopaný „pod dnem“."""
     new = []
     for tr in treasures:
         if tr.found:
             continue
-        if surface_level(heights, size, tr.x, tr.y) <= tr.z + eps:
+        target = tr.z if bottom is None else max(tr.z, bottom + 0.006)
+        if surface_level(heights, size, tr.x, tr.y) <= target + eps:
             tr.hold += dt
             if tr.hold >= hold_time:
                 tr.found, tr.found_t = True, now
@@ -237,9 +246,11 @@ class TreasureGame(Game):
         self.victory_t: float | None = None
         self.final_time = 0.0
         self.hand_hints: list[tuple[float, float, float]] = []
+        self.bottom: float | None = getattr(self, "bottom", None)
 
     def _place(self, hm) -> None:
-        self.treasures = place_treasures(hm.heights, hm.size, self.count, self.rng, forbid=hm.hands)
+        self.treasures = place_treasures(hm.heights, hm.size, self.count, self.rng, forbid=hm.hands,
+                                         bottom=self.bottom)
         if self.start_tex is not None:
             self.start_tex.release()
         self.start_tex = self.host.float_texture((hm.shape[1], hm.shape[0]), hm.heights)
@@ -266,7 +277,11 @@ class TreasureGame(Game):
             return
         if self.round_t0 is None and hm.hand_points:
             self.round_t0 = self.t
-        for tr in update_reveals(self.treasures, hm.heights, hm.size, dt, self.t):
+        # dno bedny: nejnižší místo, kam se kdy vykopalo (poklad pod ním by nešel najít)
+        gh, gw = hm.shape
+        low = float(np.percentile(hm.heights[gh // 10: -gh // 10 or None, gw // 10: -gw // 10 or None], 0.5))
+        self.bottom = low if self.bottom is None else min(self.bottom, low)
+        for tr in update_reveals(self.treasures, hm.heights, hm.size, dt, self.t, bottom=self.bottom):
             if self.round_t0 is None:
                 self.round_t0 = self.t
             cols = [(1, 0.85, 0.15), (1, 1, 0.6), (1, 1, 1)] if tr.kind != 1 else [(0.3, 1, 1), (1, 0.3, 0.9), (1, 1, 1)]

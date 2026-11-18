@@ -3,8 +3,8 @@
 * barevná nápověda: červená = přidej, modrá = uber, zelená = sedí – s plynulým přechodem
   podle velikosti chyby a „dýcháním“ tam, kde je chyba největší,
 * velké symboly + / − v místech s největší chybou (čitelné i bez rozlišení barev),
-* holografický obrys hlavní části (záře, běžící světlo, skenovací pás),
-* oslava při úspěchu (lesk, rázové vlny, konfety).
+* světlý obrys hlavní části se září do tmavého okolí,
+* oslava při úspěchu (zelené rozzáření, vlny od středu, konfety).
 
 Logiku hodnocení nemění – jen kreslí.
 """
@@ -70,28 +70,18 @@ vec3 pred_holo(vec3 c, vec2 uv, float m, float halo) {
     vec2 pm = uv * u_box;
     float outside = 1.0 - smoothstep(0.35, 0.65, m);
     // záře kolem obrysu do tmavého okolí
-    c += PRED_HOLO * halo * outside * (0.40 + 0.08 * sin(u_time * 2.0));
-    // skenovací pás, který pomalu přejíždí přes bednu
-    float sx = (fract(u_time * 0.09) * 1.5 - 0.25) * u_box.x;
-    float scan = exp(-pow((pm.x - sx) / 0.04, 2.0));
-    c += PRED_HOLO * scan * (0.30 * outside + 0.10 * (1.0 - outside));
-    // obrys: světlé jádro s běžícími světly
+    c += PRED_HOLO * halo * outside * 0.40;
+    // obrys: světlé jádro
     float edge = 1.0 - smoothstep(0.0, 0.17, abs(m - 0.5));
-    float run = 0.5 + 0.5 * sin((pm.x + pm.y) * 22.0 - u_time * 3.0);
-    vec3 ec = mix(PRED_HOLO, vec3(1.0), 0.25 + 0.6 * run);
-    return mix(c, ec, edge * (0.80 + 0.20 * run));
+    return mix(c, mix(PRED_HOLO, vec3(1.0), 0.5), edge * 0.9);
 }
 
-// oslava úspěchu: lesk přes hlavní část a rázové vlny od jejího středu
+// oslava úspěchu: zelené rozzáření hlavní části a vlny od jejího středu
 vec3 pred_celebrate(vec3 c, vec2 uv, float m, float t, vec2 center) {
     if (t < 0.0) return c;
     float fade = smoothstep(0.0, 0.4, t);
     vec2 pm = uv * u_box;
-    float s = pm.x + pm.y * 0.6;
-    float band = fract(s / 1.4 - t * 0.55);
-    float shine = exp(-pow((band - 0.5) * 1.4 / 0.05, 2.0));
     c = mix(c, c * vec3(0.9, 1.1, 0.9) + vec3(0.03, 0.08, 0.02), 0.35 * m * fade);
-    c += vec3(1.0, 0.96, 0.75) * shine * 0.40 * m * fade;
     float r = length((uv - center) * u_box);
     float w = fract((r - t * 0.40) / 0.45);
     float ring = exp(-pow((w - 0.5) * 0.45 / 0.022, 2.0)) * exp(-r * 1.5);

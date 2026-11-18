@@ -98,7 +98,7 @@ class AttractController:
         self._intro_until = self._intro_start + self.s.intro_seconds
 
     def draw_intro(self, host: RenderHost) -> None:
-        """Filmový úvodní slajd: pás se rozevře od středu, světelná linka přejede, název se rozzáří."""
+        """Úvodní slajd: pás se rozevře od středu, objeví se kategorie, název a věta „jak hrát“."""
         g = self._intro_game
         now = time.monotonic()
         if g is None or now >= self._intro_until:
@@ -139,14 +139,10 @@ def draw_intro_slide(host: RenderHost, g: type[Game], t_in: float, t_out: float)
     quad(y0, y1, 0.88, 0.88)
     quad(y1, y1 + fade, 0.88, 0.0)
     p.triangles(np.array(verts, np.float32), np.array(cols, np.float32))
-    # svítící linky na okrajích pásu + přejíždějící světlo
+    # linky na okrajích pásu v barvě kategorie
     line = max(3.0, ch / 150)
     for yy in (y0, y1 - line):
-        p.rect(0, yy, cw, line, (*accent, 0.35 * open_k))
-    sx = -cw * 0.2 + _ease(t_in / 1.2) * cw * 1.4
-    for k, w in ((1.0, cw * 0.10), (0.5, cw * 0.24)):
-        p.rect(sx - w / 2, y0, w, line, (*accent, 0.9 * k * open_k))
-        p.rect(cw - sx - w / 2, y1 - line, w, line, (*accent, 0.9 * k * open_k))
+        p.rect(0, yy, cw, line, (*accent, 0.6 * open_k))
     if open_k < 0.6:
         return
     a = _ease((t_in - 0.25) / 0.5) * _ease(t_out / 0.45)

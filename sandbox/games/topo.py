@@ -1,9 +1,7 @@
 """Barevná topografická mapa s vrstevnicemi – klasický režim AR pískoviště.
 
 Vzhled: sytá hypsometrická škála (pobřeží → nížiny → hory → sníh), plastický reliéf s teplým
-světlem a chladnými stíny, živá hladina vody s příbojem, vrstevnice s popisky výšek a jemná
-animace – stíny mraků plují přes krajinu a co pár sekund vystoupá od moře k vrcholům zářící
-„výšková vlna“ (ukazuje, co je stejně vysoko).
+světlem a chladnými stíny, živá hladina vody s příbojem, vrstevnice s popisky výšek a stíny mraků plující přes krajinu.
 """
 
 from __future__ import annotations
@@ -22,8 +20,6 @@ FRAG = """
 uniform int u_show_contours;
 uniform int u_shade;
 uniform vec4 u_legend;   // obdélník legendy v uv (x0, y0, x1, y1), x0 < 0 = vypnuto
-uniform float u_scan;    // výška zářící vlny [m] (< -1 = vypnuto)
-uniform float u_scan_a;  // síla vlny 0..1
 uniform int u_nlabels;
 uniform vec4 u_labels[10];  // popisky vrstevnic: střed uv, úhel [rad], polovina délky [m]
 
@@ -147,23 +143,11 @@ void main() {
     float shore = 1.0 - smoothstep(0.0, 1.8 * fwidth(h), abs(h - u_water_level));
     c = mix(c, vec3(0.02, 0.18, 0.55), shore * 0.9);
 
-    // zářící výšková vlna – vystoupá od moře k vrcholům
-    if (u_scan > -1.0 && !legend) {
-        float dw = abs(h - u_scan);
-        float wpx = max(fwidth(h), 2.5e-4);
-        float core = 1.0 - smoothstep(1.5 * wpx, 2.8 * wpx, dw);
-        float halo = exp(-dw / max(5.0 * wpx, 0.0012));
-        float below = smoothstep(0.0, 0.02, u_scan - h) * (1.0 - smoothstep(0.0, 0.035, u_scan - h));
-        vec3 sc = vec3(0.35, 1.0, 1.0);
-        c = mix(c, c + sc * (core * 0.75 + halo * 0.25 + below * 0.10), u_scan_a);
-    }
     f_color = vec4(c, 1.0);
 }
 """
 
 INTERVALS = [0.005, 0.01, 0.02]
-SCAN_PERIOD = 14.0  # [s] jak často vystoupá výšková vlna
-SCAN_RISE = 6.0  # [s] jak dlouho stoupá
 
 
 def contour_labels(hm, levels: list[float], old: list[tuple] | None, limit: int = MAX_LABELS,
@@ -274,22 +258,9 @@ class TopoGame(Game):
         levels = [lv for lv in major_levels(m) if m.water_level < lv]
         self.labels = contour_labels(hm, levels, self.labels) if self.show_contours else []
 
-    def _scan(self) -> tuple[float, float]:
-        """Výška a síla zářící vlny (stoupá od hladiny k nejvyššímu místu)."""
-        ph = self.host.time % SCAN_PERIOD
-        if ph > SCAN_RISE:
-            return -10.0, 0.0
-        k = ph / SCAN_RISE
-        lo = max(self._lo, self.host.settings.map.water_level)
-        hi = max(self._hi, lo + 0.01)
-        k = k * k * (3 - 2 * k)
-        a = min(1.0, ph / 0.6) * min(1.0, (SCAN_RISE - ph) / 0.8)
-        return lo + (hi + 0.004 - lo) * k, a
-
     def render(self) -> None:
         host = self.host
         legend = (0.955, 0.08, 0.985, 0.92) if self.legend else (-1.0, 0, 0, 0)
-        scan, scan_a = self._scan()
         bw, bh = host.box_size
         labs = []
         size = hud.size(host.canvas_size, 0.62)
@@ -305,8 +276,7 @@ class TopoGame(Game):
         except KeyError:
             pass
         host.draw_fullscreen(prog, u_show_contours=int(self.show_contours), u_shade=int(self.shade),
-                             u_legend=legend, u_scan=float(scan), u_scan_a=float(scan_a), u_nlabels=len(labs))
-        host.glow(0.45 * max(scan_a, 0.25), 0.85)
+                             u_legend=legend, u_nlabels=len(labs))
         p = host.painter
         if self.show_contours:
             for x, y, a, lv in self.labels:

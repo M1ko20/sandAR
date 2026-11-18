@@ -32,7 +32,7 @@ uniform float u_tol;
 uniform float u_offset;
 uniform float u_scale;
 uniform float u_reveal;   // 0..1: úspěch – nápověda zmizí, fotka se rozzáří
-uniform float u_since;    // [s] od úspěchu (záblesk, světelný přejezd, jiskry); < 0 = není úspěch
+uniform float u_since;    // [s] od úspěchu (záblesk, jiskry); < 0 = není úspěch
 
 float krajina_hash(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -91,11 +91,6 @@ void main() {
         // záblesk při odhalení
         float flash = exp(-u_since * 4.0) * smoothstep(0.0, 0.06, u_since);
         c = mix(c, vec3(1.0, 0.97, 0.88), flash * 0.75);
-        // světelný přejezd šikmo přes krajinu (jako odlesk na fotce)
-        float s = uv.x * 0.8 + (1.0 - uv.y) * 0.45;
-        float sc = -0.3 + u_since * 0.9;
-        float band = exp(-pow((s - sc) / 0.045, 2.0)) * (1.0 - smoothstep(1.4, 2.4, u_since));
-        c += vec3(1.0, 0.86, 0.55) * band * (0.6 + 0.3 * shade);
         // zlaté jiskry
         float sp = krajina_sparks(pm, u_time) * u_reveal * (0.45 + 0.55 * exp(-u_since / 3.0));
         c = mix(c, vec3(1.0, 0.88, 0.45), sp);

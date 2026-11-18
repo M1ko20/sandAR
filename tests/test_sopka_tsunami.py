@@ -301,8 +301,9 @@ def test_tsunami_sea_and_towns_stay_while_building(host):
     game.stop()
 
 
-def test_volcano_vent_does_not_jump_to_slightly_higher_peak(host):
-    from sandbox.games.sopka import VolcanoGame
+def test_volcano_vent_is_locked_for_the_round(host):
+    """Místo sopky se zamkne, jakmile je v bedně kopec, a během kola se nemění (lidé hrabou)."""
+    from sandbox.games.sopka import CALM, VolcanoGame
     from sandbox.terrain.heightmap import HeightMap
 
     base = cone(60, 100, 30, 30, 0.08, 15) - 0.01
@@ -311,12 +312,25 @@ def test_volcano_vent_does_not_jump_to_slightly_higher_peak(host):
     for _ in range(30):
         game.update(HeightMap(base, (1.0, 0.6)), 1 / 30)
     assert abs(game.vent_m[0] - 0.3) < 0.03
-    slightly = np.maximum(base, cone(60, 100, 30, 70, 0.085, 15) - 0.01)
+    higher = np.maximum(base, cone(60, 100, 30, 70, 0.12, 15) - 0.01)
+    for _ in range(60):
+        game.update(HeightMap(higher, (1.0, 0.6)), 1 / 30)
+    assert game.phase == CALM
+    assert abs(game.vent_m[0] - 0.3) < 0.03  # vyšší kopec postavený během kola sopku nepřestěhuje
+    game.stop()
+
+
+def test_volcano_waits_for_a_hill_before_locking(host):
+    from sandbox.games.sopka import VolcanoGame
+    from sandbox.terrain.heightmap import HeightMap
+
+    flat = np.zeros((60, 100), np.float32)
+    game = VolcanoGame(host)
+    game.start()
     for _ in range(30):
-        game.update(HeightMap(slightly, (1.0, 0.6)), 1 / 30)
-    assert abs(game.vent_m[0] - 0.3) < 0.03  # o 5 mm vyšší kopec sopku nepřestěhuje
-    clearly = np.maximum(base, cone(60, 100, 30, 70, 0.12, 15) - 0.01)
+        game.update(HeightMap(flat, (1.0, 0.6)), 1 / 30)
+    hill = cone(60, 100, 30, 70, 0.08, 15) - 0.01
     for _ in range(30):
-        game.update(HeightMap(clearly, (1.0, 0.6)), 1 / 30)
-    assert abs(game.vent_m[0] - 0.7) < 0.03  # zřetelně vyšší ano
+        game.update(HeightMap(hill, (1.0, 0.6)), 1 / 30)
+    assert abs(game.vent_m[0] - 0.7) < 0.03  # na rovném písku se nezamklo, sopka je na novém kopci
     game.stop()

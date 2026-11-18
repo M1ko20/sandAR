@@ -1,8 +1,8 @@
 """Živá sopka: postav z písku kopec a sleduj, jak z něj vytéká láva.
 
 Program najde nejvyšší vrchol a označí ho jako sopku (kruh „SOPKA“ přímo na písku),
-15 s odpočítává a pak sopka vybuchne. Během odpočtu se kráter stěhuje na nejvyšší vrchol,
-jak návštěvníci stavějí; poslední vteřiny je pevný. Láva teče podle skutečného sklonu písku (viskózní
+15 s odpočítává a pak sopka vybuchne. Místo sopky se na začátku kola zamkne (jakmile je
+v bedně opravdový kopec) a do konce kola se nemění, ani když lidé hrabou a staví hráze. Láva teče podle skutečného sklonu písku (viskózní
 simulace ``sandbox.sim.lava``), chladne z bílé přes oranžovou a tmavě červenou
 až v černou krustu s žhnoucími puklinami a zastaví se.
 
@@ -378,7 +378,7 @@ class VolcanoGame(Game):
     ]
 
     WALL_GAP = 0.10  # [m] kráter ne blíž ke stěně (u stěn bývá nahrnutý písek)
-    MOVE_MARGIN = 0.015  # [m] o kolik musí být jiný vrchol vyšší, aby se sopka přestěhovala
+    LOCK_HEIGHT = 0.02  # [m] od jak vysokého kopce se místo sopky zamkne
 
     def start(self) -> None:
         self.prog = self.host.program(FRAG)
@@ -442,14 +442,26 @@ class VolcanoGame(Game):
             self.saved_last = (sum(not v.burned for v in self.villages), len(self.villages))
         if phase == CALM:
             self._place_pending = True  # nový cyklus = nové vesnice (terén se mezitím změnil)
+            self._vent_locked = False  # nový cyklus = sopka se znovu vybere
 
     def _wake(self, hm) -> None:
-        """Probudí sopku: kráter se zafixuje na nejvyšším vrcholu, vesnice zůstanou."""
+        """Probudí sopku na zamčeném místě (kráter se během kola nestěhuje)."""
+        if not self._vent_locked:
+            self._lock_vent(hm, force=True)
+        self._set_phase(RUMBLE)
+        if self._place_pending:
+            self._place_villages(hm)
+
+    def _lock_vent(self, hm, force: bool = False) -> None:
+        """Na začátku kola: sopka = nejvyšší vrchol, a tam už zůstane až do konce kola
+        (když lidé hrabou a staví hráze, nejvyšší místo se mění – sopka nesmí přeskakovat).
+        Na rovném písku se ještě nezamyká – počká, až někdo postaví kopec."""
         old = self.vent_m
         self._choose_vent(hm)
-        self._set_phase(RUMBLE)
-        if self._place_pending or math.dist(old, self.vent_m) > 0.12:
-            self._place_villages(hm)
+        if force or self.vent_height >= self.LOCK_HEIGHT:
+            self._vent_locked = True
+        if not self.villages or math.dist(old, self.vent_m) > 0.12:
+            self._place_pending = True
 
     def _place_villages(self, hm) -> None:
         self._place_pending = False
@@ -461,24 +473,12 @@ class VolcanoGame(Game):
         names = list(self.rng.permutation(VILLAGE_NAMES))
         self.villages = [build_village(names[i], x, y, self.rng) for i, (x, y) in enumerate(spots)]
 
-    def _choose_vent(self, hm, sticky: bool = False) -> None:
-        """Kráter = nejvyšší vrchol (ne u stěn, kde se písek nahrne o okraj).
-
-        ``sticky``: během odpočtu se kráter přestěhuje, jen když je jiný vrchol zřetelně vyšší
-        (o ``MOVE_MARGIN``) – drobné změny písku a ruka nad vrcholem ho nerozhodí."""
+    def _choose_vent(self, hm) -> None:
+        """Kráter = nejvyšší vrchol (ne u stěn, kde se písek nahrne o okraj)."""
         gh, gw = hm.shape
         cw, ch = hm.cell_size
         border = max(2, int(round(self.WALL_GAP / cw)))
         iy, ix, rel = find_vent(hm.heights, hm.hands, border=border)
-        if sticky and self.sim is not None:
-            oy, ox = int(self.vent[0] * DS), int(self.vent[1] * DS)
-            oy, ox = min(max(oy, 0), gh - 1), min(max(ox, 0), gw - 1)
-            s = blur3(blur3(hm.heights))
-            win = (slice(max(0, oy - 3), oy + 4), slice(max(0, ox - 3), ox + 4))
-            covered = hm.hands is not None and hm.hands.shape == s.shape and hm.hands[win].any()
-            if covered or float(s[iy, ix] - s[oy, ox]) < self.MOVE_MARGIN:
-                iy, ix = oy, ox
-                rel = float(s[oy, ox] - np.median(s)) if not covered else self.vent_height
         self.vent_height = rel
         self.vent_m = ((ix + 0.5) * cw, (iy + 0.5) * ch)
         self.vent = (iy / DS, ix / DS)
@@ -506,14 +506,11 @@ class VolcanoGame(Game):
         self.phase_t += dt
         self.clock += dt
         if self.phase == CALM:
-            # sopka = nejvyšší vrchol; během odpočtu ho sleduje, jak se staví
-            self._vent_t = getattr(self, "_vent_t", 0.0) + dt
-            if self.phase_t < 0.05 or self._vent_t > 0.5:
-                self._vent_t = 0.0
-                old = self.vent_m
-                self._choose_vent(hm, sticky=self.phase_t >= 0.05)
-                if self.villages and math.dist(old, self.vent_m) > 0.12:
-                    self._place_pending = True  # sopka se přestěhovala -> vesnice k ní
+            if not self._vent_locked:
+                self._vent_t = getattr(self, "_vent_t", 0.0) + dt
+                if self.phase_t < 0.05 or self._vent_t > 0.5:
+                    self._vent_t = 0.0
+                    self._lock_vent(hm)
             if self._place_pending and self.phase_t > 0.5:
                 self._place_villages(hm)  # v klidu podle aktuálního terénu, ať je vidět, co chránit
         if self.phase_t >= self.phase_len:
@@ -878,8 +875,8 @@ class VolcanoGame(Game):
     def key(self, name: str, shift: bool = False) -> bool:
         hm = self.host.heightmap
         if name == "e":
-            if hm is not None:
-                self._choose_vent(hm)
+            if hm is not None and not self._vent_locked:
+                self._lock_vent(hm, force=True)
             self.fade = 1.0
             self._set_phase(ERUPT)
             self.host.notify("Erupce!")

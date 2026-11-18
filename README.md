@@ -114,8 +114,8 @@ Nástroj `build/kinect2_bridge/kinect2_snap` (barva srovnaná s hloubkou) se ses
    prostředí: ryby a kachny ve vodě, krabi a želvy na pláži, srnky, zajíci, lišky a motýli na loukách,
    medvěd v lese, kamzíci na skalách, orel nad horami, ptáci nad krajinou. Počet roste s velikostí
    prostředí, plachá zvířata utíkají před rukou.
-7. **Živá sopka** – nejvyšší vrchol se označí kruhem „SOPKA“ a 15 s se odpočítává (kruh se během odpočtu
-   stěhuje na nejvyšší vrchol, jak lidé stavějí). Pak z něj vyteče láva, stéká po svahu a chladne v černou
+7. **Živá sopka** – nejvyšší vrchol se označí kruhem „SOPKA“ a 15 s se odpočítává. Místo sopky se zamkne
+   (jakmile je v bedně kopec aspoň 2 cm) a do konce kola se nemění, ani když lidé hrabou. Pak z něj vyteče láva, stéká po svahu a chladne v černou
    krustu. Pod sopkou stojí vesnice – láva je zapálí, hrázemi a koryty je lze zachránit
    (E erupce hned, A automatický cyklus, V vesnice).
 8. **Mega tsunami** – z moře přijde vlna a zaplaví krajinu; hráze chrání města (T = vlna hned). Strana

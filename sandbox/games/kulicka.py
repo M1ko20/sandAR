@@ -54,9 +54,6 @@ void main() {
         c = mix(c, green, g * (1.0 - bunker));
         float collar = smoothstep(0.150, 0.162, d) * (1.0 - smoothstep(0.168, 0.185, d));
         c = mix(c, vec3(0.02, 0.32, 0.12), collar * 0.8);
-        // světelné vlny, které se stahují k jamce ("sem!")
-        float wave = pow(0.5 + 0.5 * sin((d / 0.06 + u_time * 0.9) * 6.2831853), 6.0);
-        c += vec3(0.85, 1.0, 0.55) * wave * 0.22 * g * smoothstep(0.03, 0.08, d);
     }
     c *= mix(0.5, 1.16, hillshade(uv, 3.5));
     vec2 cl = contours(h);

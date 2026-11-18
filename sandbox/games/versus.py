@@ -169,25 +169,24 @@ vec3 vs_arena_k(vec3 c, vec2 uv, float tint, float rimk) {
     float tk = side == 0 ? 1.0 : 1.7;
     c = mix(c, tcol * lum, clamp(tint * tk * (0.8 + 0.4 * power), 0.0, 0.85) * (1.0 - wet));
 
-    // 2) záře podél stěn půlky, vlna běží od hráče k bariéře
+    // 2) záře podél stěn půlky (v nebezpečí pulzuje červeně)
     float e = min(min(pm.x, W - pm.x), min(pm.y, D - pm.y));
     float rim = exp(-e / 0.035);
-    float flow = 0.55 + 0.45 * sin((dx * 9.0 + pm.y * 3.0) * 2.0 + t * 2.4);
+    float flow = 0.8;
     float ap = alarm * (0.55 + 0.45 * sin(t * 9.0));
     vec3 rimc = mix(team, vec3(1.0, 0.15, 0.05), alarm * 0.6);
     c += rimc * rim * rimk * ((0.25 + 0.3 * power) * flow + 0.7 * ap);
 
-    // 3) neutrální pás: šikmé pruhy, které pomalu jedou
+    // 3) neutrální pás: šikmé pruhy
     if (u_vs_neutral > 0.0 && dx < u_vs_neutral) {
-        float st = step(0.5, fract((pm.x + pm.y) / 0.045 - t * 0.35));
+        float st = step(0.5, fract((pm.x + pm.y) / 0.045));
         c = c * 0.45 + vec3(0.9, 0.9, 1.0) * st * 0.16;
         c += team * 0.8 * exp(-(u_vs_neutral - dx) / 0.004);
     }
 
-    // 4) energetická bariéra: bílé jádro, plazma v barvách týmů, světelné pulzy
-    float speed = 1.0 + 1.5 * max(u_vs_alarm.x, u_vs_alarm.y);
-    float plasma = vs_noise(vec2(dx * 35.0, pm.y * 7.0 - t * 2.2 * speed * (side == 0 ? 1.0 : -1.0)));
-    float packets = exp(-pow((fract(pm.y * 2.2 + (side == 0 ? -t : t) * 0.7 * speed) - 0.5) * 7.0, 2.0));
+    // 4) dělicí čára: bílé jádro a záře v barvách týmů
+    float plasma = vs_noise(vec2(dx * 35.0, pm.y * 7.0));
+    float packets = 0.0;
     float core = exp(-pow(dx / 0.0065, 2.0));
     float inner = exp(-dx / (0.014 + 0.012 * plasma));
     float outer = exp(-dx / 0.08);
@@ -195,15 +194,8 @@ vec3 vs_arena_k(vec3 c, vec2 uv, float tint, float rimk) {
     c += team * (inner * (0.8 + 0.9 * plasma + 1.4 * packets) + outer * (0.25 + 0.35 * power));
     c = mix(c, vec3(1.0, 0.98, 0.95), clamp(core * (0.9 + 0.3 * packets), 0.0, 1.0));
 
-    // 5) rázová vlna na startu fáze
-    if (u_vs_shock >= 0.0 && u_vs_shock < 2.5) {
-        float r = u_vs_shock * 0.85;
-        float ddx = abs(pm.x - u_vs_shock_x);
-        float wave = exp(-pow((ddx - r) / 0.035, 2.0)) * exp(-u_vs_shock * 1.1);
-        c += mix(vec3(1.0), team, 0.7) * wave * 1.5;
-    }
 
-    // 6) vítězství: paprsky a vlny od strany vítěze, poražený zešedne
+    // 6) vítězství: paprsky od strany vítěze, poražený zešedne
     if (u_vs_win_t >= 0.0) {
         float fade = smoothstep(0.0, 0.8, u_vs_win_t);
         if (u_vs_winner > 1.5) {
@@ -212,10 +204,8 @@ vec3 vs_arena_k(vec3 c, vec2 uv, float tint, float rimk) {
             vec2 o = vec2(side == 0 ? -0.05 : W + 0.05, 0.5 * D);
             vec2 q = pm - o;
             float a = atan(q.y, abs(q.x));
-            float rays = smoothstep(0.25, 0.9, sin(a * 9.0 + t * 0.9));
-            float dist = length(q);
-            float ring = exp(-pow((fract(dist / 0.9 - t * 0.55) - 0.5) * 7.0, 2.0));
-            c += mix(team, VS_GOLD, 0.45) * fade * (0.38 * rays + 0.45 * ring + 0.10) * (0.3 + 0.7 * rimk);
+            float rays = smoothstep(0.25, 0.9, sin(a * 9.0));
+            c += mix(team, VS_GOLD, 0.45) * fade * (0.38 * rays + 0.18) * (0.3 + 0.7 * rimk);
         } else {
             c = mix(c, vec3(lum) * 0.8, 0.45 * fade);
         }
