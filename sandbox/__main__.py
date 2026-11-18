@@ -10,6 +10,7 @@ Příkazy:
   autocalibrate  automatická kalibrace Kinectu i projektoru (barevná kamera Kinectu)
   fitarea    přeměřit hrací plochu (okraje od stěn bedny) nad uloženou kalibrací
   checkcal   kontrola kalibrace: přesnost v cm + fotky mřížky a vrstevnic (--out složka)
+  zvuky      přehrát všechny zvuky (--game NÁZEV jen jeden, --out SLOŽKA uložit jako WAV)
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ def _parser() -> argparse.ArgumentParser:
                                 formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
     p.add_argument("command", nargs="?", default="run",
                    choices=["run", "calibrate", "games", "monitors", "record", "snapshot", "autocalibrate", "checkcal", "fitarea",
-                            "ortofoto"])
+                            "ortofoto", "zvuky"])
     p.add_argument("--sensor", choices=["auto", "kinect2", "sim", "replay"], help="zdroj hloubky")
     p.add_argument("--replay", metavar="SOUBOR", help="nahrávka pro --sensor replay")
     p.add_argument("--pipeline", choices=["gl", "cpu"], help="dekódování Kinectu v2")
@@ -102,6 +103,11 @@ def main(argv: list[str] | None = None) -> int:
         for line in download_all():
             print(line)
         return 0
+
+    if args.command == "zvuky":
+        from .tools import sound_preview
+
+        return sound_preview(only=args.game, out=args.out, volume=settings.audio.volume)
 
     if args.command == "snapshot":
         from .tools import render_snapshots

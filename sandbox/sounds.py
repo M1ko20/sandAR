@@ -75,7 +75,7 @@ def _bell(freq: float, seconds: float, decay: float = 0.9, bright: float = 1.0) 
     for ratio, amp, dk in ((0.5, 0.25, 1.4), (1.0, 1.0, 1.0), (1.19, 0.35, 0.7), (1.5, 0.3, 0.6),
                            (2.0, 0.55 * bright, 0.5), (2.74, 0.25 * bright, 0.35), (4.07, 0.15 * bright, 0.2)):
         out += amp * np.sin(2 * np.pi * freq * ratio * t) * np.exp(-t / (decay * dk))
-    return out * np.clip(t / 0.002, 0, 1)
+    return _fade(out * np.clip(t / 0.002, 0, 1), 0.0, min(0.25, seconds * 0.3))
 
 
 def _tone(freq: float, seconds: float, harmonics=(1.0, 0.5, 0.3, 0.15), vibrato: float = 0.0) -> np.ndarray:
@@ -256,7 +256,8 @@ def crash() -> np.ndarray:
     t = _t(5.0)
     body = _noise(5.0, 24, color=1.1, lo=60, hi=7000)
     env = np.clip(t / 0.9, 0, 1) ** 2 * np.exp(-np.maximum(t - 0.9, 0) / 1.6)
-    hit = _noise(5.0, 25, color=0.4, lo=800, hi=10000) * _env(n, 0.85, 0.35) * (t > 0.85)
+    k = np.clip(t - 0.85, 0, None)
+    hit = _noise(5.0, 25, color=0.4, lo=800, hi=10000) * np.clip(k / 0.03, 0, 1) * np.exp(-k / 0.35) * (t > 0.85)
     return _fade(_norm(_norm(body * env) + 0.5 * _norm(hit)))
 
 
@@ -301,7 +302,7 @@ def fanfare() -> np.ndarray:
         x = _tone(f, d, (1.0, 0.7, 0.5, 0.35, 0.2, 0.1), vibrato=0.04)
         n = len(x)
         env = np.minimum(np.arange(n) / (0.03 * SR), 1) * np.exp(-np.arange(n) / (SR * d * 1.5))
-        return (x * env).astype(np.float32)
+        return _fade((x * env).astype(np.float32), 0.0, min(0.08, d * 0.4))
 
     seq = [(0.0, 392.0, 0.16), (0.16, 523.25, 0.16), (0.32, 659.25, 0.16), (0.48, 783.99, 0.9)]
     parts = [(s, brass(f, d)) for s, f, d in seq]
@@ -315,7 +316,8 @@ def fail() -> np.ndarray:
     def soft(f, d):
         x = _tone(f, d, (1.0, 0.3, 0.1))
         n = len(x)
-        return x * np.minimum(np.arange(n) / (0.02 * SR), 1) * np.exp(-np.arange(n) / (SR * 0.35))
+        return _fade((x * np.minimum(np.arange(n) / (0.02 * SR), 1)
+                      * np.exp(-np.arange(n) / (SR * 0.35))).astype(np.float32), 0.0, 0.08)
     return _fade(_norm(_mix(1.3, [(0.0, soft(392.0, 0.6)), (0.32, soft(311.1, 0.9))])))
 
 
