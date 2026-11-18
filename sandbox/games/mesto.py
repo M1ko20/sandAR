@@ -281,6 +281,8 @@ class TownGame(Game):
         self.flash = 0.0
         self._next_flash = 4.0
         self._next_fw = 0.0
+        self._splash: list[eco.House] = []  # domy zatopené od posledního šplouchnutí (zvuk)
+        self._splash_t = -1.0
 
     def stop(self) -> None:
         self.prog.release()
@@ -347,16 +349,29 @@ class TownGame(Game):
         if self.phase == PLAN:
             self._plan(hm)
         elif self.phase == PREP:
+            left, prev = self.PREP_TIME - self.phase_t, self.PREP_TIME - (self.phase_t - dt)
+            if 0 < left and math.ceil(left) != math.ceil(prev) and math.ceil(left) <= 5:
+                self.sfx.play("beep", 0.8)  # odpočet posledních 5 s
             if self.phase_t >= self.PREP_TIME:
                 self.phase, self.phase_t = FLOOD, 0.0
                 self.host.notify("Povodeň!")
+                self.sfx.play("go", 1.0)
         elif self.phase == FLOOD:
             assert self.source is not None
             eco.add_source(sim.depth, hm.size, self.source, 0.04, self._flow(hm) * dt)
             wet = eco.flooded_houses(sim.depth, self.houses, hm.size, self.FLOOD_DEPTH)
+            new = []
             for h, w in zip(self.houses, wet):
                 if w and not h.flooded:
                     h.flooded, h.flooded_at = True, self.clock
+                    new.append(h)
+            self._splash += new
+            # zatopený dům šplouchne; víc domů těsně po sobě = jedno hlasitější šplouchnutí (max 3× za s)
+            if self._splash and self.clock - self._splash_t >= 0.35:
+                x = sum(h.x for h in self._splash) / len(self._splash) / hm.size[0]
+                self.sfx.play("splash", min(1.0, 0.7 + 0.15 * len(self._splash)), x=x,
+                              pitch=float(self.rng.uniform(0.9, 1.1)))
+                self._splash, self._splash_t = [], self.clock
             if self.phase_t >= self.FLOOD_TIME or all(h.flooded for h in self.houses):
                 self._finish()
         elif self.phase == RESULT and self.phase_t >= self.RESULT_TIME:
@@ -377,6 +392,13 @@ class TownGame(Game):
         if self.phase == FLOOD and self.clock >= self._next_flash:
             self.flash = 1.0
             self._next_flash = self.clock + float(self.rng.uniform(3.0, 7.0))
+            self.sfx.play("thunder", 0.8, x=float(self.rng.uniform(0.2, 0.8)), pitch=float(self.rng.uniform(0.9, 1.1)))
+        if self.source is not None:  # zvuk bouře a povodně z místa pramene
+            sxr = self.source[0] / hm.size[0]
+            if storm > 0:
+                self.sfx.loop("rain", 0.6 * storm, x=sxr)
+            if self.phase == FLOOD:
+                self.sfx.loop("roar", 0.4 + 0.5 * min(1.0, self.phase_t / 3.0), x=sxr)
         self.sparks.update(dt)
         if (self.phase == RESULT and self.last_score and self.last_score[0] >= 0.8 * self.last_score[1]
                 and self.town is not None and self.clock >= self._next_fw and self.phase_t < self.RESULT_TIME - 2):
@@ -385,6 +407,8 @@ class TownGame(Game):
             r = self._house_size() * 5
             self.sparks.burst(self.town[0] + float(self.rng.uniform(-r, r)), self.town[1] + float(self.rng.uniform(-r, r)),
                               60, 0.55, cols, life=1.5, rng=self.rng)
+            if self.phase_t < 4.0:
+                self.sfx.play("pop", 0.4, x=self.town[0] / hm.size[0], pitch=float(self.rng.uniform(0.9, 1.15)))
 
     def _storm(self) -> float:
         """0..1 síla bouře nad pramenem: chvíli před povodní se zatahuje, během povodně leje."""
@@ -399,6 +423,8 @@ class TownGame(Game):
         self.last_score = (saved, len(self.houses))
         self.rounds += 1
         self.phase, self.phase_t = RESULT, 0.0
+        pct = saved / max(len(self.houses), 1)
+        self.sfx.play("fanfare" if pct >= 0.8 else "chime" if pct >= 0.4 else "fail", 1.0)
 
     # --- kreslení ------------------------------------------------------------------------------
     def render(self) -> None:
@@ -599,6 +625,7 @@ class TownGame(Game):
             if self.phase == PREP:
                 self.phase, self.phase_t = FLOOD, 0.0
                 self.host.notify("Povodeň!")
+                self.sfx.play("go", 1.0)
             elif self.phase == RESULT:
                 self._need_town = True
             else:

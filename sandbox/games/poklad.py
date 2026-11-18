@@ -272,8 +272,11 @@ class TreasureGame(Game):
             elif int((self.t - dt) / 0.35) != int(self.t / 0.35):  # ohňostroj
                 W, D = hm.size
                 cols = [(1, 0.85, 0.2), (1, 0.3, 0.5), (0.3, 1, 1), (0.6, 1, 0.3), (1, 1, 1)]
-                self.sparks.burst(self.rng.uniform(0.15, 0.85) * W, self.rng.uniform(0.2, 0.8) * D, 60, 0.7, cols,
+                fx = float(self.rng.uniform(0.15, 0.85))
+                self.sparks.burst(fx * W, self.rng.uniform(0.2, 0.8) * D, 60, 0.7, cols,
                                   life=1.6, rng=self.rng)
+                if self.t - self.victory_t < 4.0:  # ohňostroj slyšet jen na začátku oslavy
+                    self.sfx.play("pop", 0.35, x=fx, pitch=float(self.rng.uniform(0.9, 1.15)))
             return
         if self.round_t0 is None and hm.hand_points:
             self.round_t0 = self.t
@@ -286,12 +289,18 @@ class TreasureGame(Game):
                 self.round_t0 = self.t
             cols = [(1, 0.85, 0.15), (1, 1, 0.6), (1, 1, 1)] if tr.kind != 1 else [(0.3, 1, 1), (1, 0.3, 0.9), (1, 1, 1)]
             self.sparks.burst(tr.x, tr.y, 70, 0.6, cols, life=1.4, rng=self.rng)
+            # zvuk nálezu: mince cinkne; drahokam zvoní výš a třpytí se, truhla je hlubší a třpytí se
+            x = tr.x / hm.size[0]
+            self.sfx.play("coin", 1.0, x=x, pitch=(1.0, 1.15, 0.85)[tr.kind % 3])
+            if tr.kind in (1, 2):
+                self.sfx.play("sparkle", 0.7, x=x)
         # jiskření nalezených
         for tr in self.treasures:
             if tr.found and self.rng.random() < dt * 1.5:
                 self.sparks.burst(tr.x, tr.y, 6, 0.15, [(1, 1, 0.7), (1, 1, 1)], life=0.8, rng=self.rng)
         if self.treasures and self.found == len(self.treasures):
             self.victory_t = self.t
+            self.sfx.play("fanfare", 1.0)
             self.final_time = self.t - (self.round_t0 if self.round_t0 is not None else self.t)
         # nápověda u rukou
         hidden = [(tr.x, tr.y) for tr in self.treasures if not tr.found]

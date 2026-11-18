@@ -107,12 +107,15 @@ class Fireworks:
                                col]).astype(np.float32)
         self.sparks = np.vstack([self.sparks, new])[-1500:]
 
-    def update(self, dt: float, ch: float) -> None:
+    def update(self, dt: float, ch: float) -> list[float]:
+        """Posune rakety a jiskry; vrací x [px] raket, které právě vybuchly (pro zvuk)."""
+        exploded: list[float] = []
         if len(self.rockets):
             self.rockets[:, 1] += self.rockets[:, 2] * dt
             done = self.rockets[:, 1] <= self.rockets[:, 3]
             for r in self.rockets[done]:
                 self.burst(float(r[0]), float(r[1]), int(r[4]), ch)
+                exploded.append(float(r[0]))
             self.rockets = self.rockets[~done]
         if len(self.sparks):
             s = self.sparks
@@ -121,6 +124,7 @@ class Fireworks:
             s[:, 3] += ch * 0.12 * dt
             s[:, 4] -= dt
             self.sparks = s[s[:, 4] > 0]
+        return exploded
 
     def draw(self, p, ch: float) -> None:
         verts, cols = [], []
@@ -256,6 +260,7 @@ class HighestMountainGame(Game):
         self.confetti: np.ndarray | None = None  # (N, 8): x, y, vx, vy, úhel, r, g, b
         self.fw = Fireworks()  # ohňostroj (jen vzhled)
         self._next_rocket = 0.0
+        self._pop_t = -1.0  # poslední zvuk prasknutí ohňostroje
         self.gauge_v: float | None = None  # vyhlazená hodnota na výškové stupnici [m]
 
     # --- veličiny ------------------------------------------------------------------------
@@ -306,12 +311,21 @@ class HighestMountainGame(Game):
         if self.state == "result" and self.is_record and self.state_t < 8 and self.t >= self._next_rocket:
             self._next_rocket = self.t + 0.3
             self.fw.launch(self.host.canvas_size[0], ch, 2)
-        self.fw.update(dt, ch)
+        exploded = self.fw.update(dt, ch)
+        if exploded and self.t - self._pop_t >= 0.4 and not (self.state == "result" and self.state_t > 6):
+            # prasknutí ohňostroje: nejvýš 2,5× za s a jen prvních 6 s oslavy (ať to neleze na nervy)
+            self._pop_t = self.t
+            cw = self.host.canvas_size[0]
+            self.sfx.play("pop", 0.45, x=sum(exploded) / len(exploded) / cw,
+                          pitch=0.9 + 0.25 * ((self.t * 7.3) % 1.0))
 
         if self.state == "ready":
             if self.hand_time >= HANDS_TO_START:
                 self.start_round()
         elif self.state == "round":
+            left, prev = ROUND - self.state_t, ROUND - (self.state_t - dt)
+            if 0 < left and math.ceil(left) != math.ceil(prev) and math.ceil(left) <= 5:
+                self.sfx.play("go" if math.ceil(left) == 1 else "beep", 0.8)  # odpočet posledních 5 s
             while self.recent and self.recent[0][0] < self.t - FINAL_WINDOW:
                 self.recent.popleft()
             if self.state_t >= ROUND:
@@ -334,11 +348,13 @@ class HighestMountainGame(Game):
         self.final = None
         self.confetti = None
         self.host.notify(VARIANTS[self.variant][1])
+        self.sfx.play("whistle", 0.9)
 
     def _finish(self) -> None:
         if not self.recent and self.point is not None:
             self.recent.append((self.t, self.point[2]))
         self._set_state("result")
+        self.sfx.play("gong", 0.9)
         if not self.recent:
             self.final = None
             return
@@ -350,8 +366,10 @@ class HighestMountainGame(Game):
         if self.is_record:
             self._spawn_confetti()
             self.fw.burst(x, y, 0, self.host.canvas_size[1], 160)
+            self.sfx.play("fanfare", 1.0, x=x / self.host.canvas_size[0])
         elif self.rank is not None:  # umístění v TOP 5 dne: jedna salva na vrcholu
             self.fw.burst(x, y, 2, self.host.canvas_size[1], 90)
+            self.sfx.play("chime", 0.9, x=x / self.host.canvas_size[0])
         log.info("%s: %.1f cm (%s), rekord=%s, pořadí dne=%s", VARIANTS[self.variant][0], self.final * 100,
                  self._alt(self.final), self.is_record, self.rank)
 

@@ -284,6 +284,7 @@ class MinigolfGame(Game):
         self.celebrate_t = -99.0
         self.celebrate_pos = (0.0, 0.0)
         self.fireworks: list[tuple[float, float, float]] = []  # (čas, x, y) – další salvy oslavy
+        self._sfx_q: list[tuple[float, str, float, float]] = []  # odložené zvuky (čas, název, hlasitost, x)
         self.balls = []
         self.hole = None  # umístí se při prvním update (potřebuje výšky)
         self.pending_spawn = [self.t] * self.n_balls
@@ -323,6 +324,10 @@ class MinigolfGame(Game):
             a = self.rng.uniform(0, 2 * math.pi)
             r = self.rng.uniform(0.12, 0.25)
             self.fireworks.append((self.t + 0.3 + 0.35 * k, hx + r * math.cos(a), hy + r * math.sin(a)))
+        # zvuk: míček cinkne do jamky, pak odměna (fanfára za nejrychlejší jamku)
+        bw = self.host.box_size[0]
+        self.sfx.play("plop", 1.0, x=hx / bw)
+        self._sfx_q.append((self.t + 0.25, "fanfare" if took <= self.best else "chime", 0.9, hx / bw))
         self.balls.remove(ball)
         self.pending_spawn.append(self.t + 1.5)
         hm = self.host.heightmap
@@ -353,6 +358,7 @@ class MinigolfGame(Game):
                 if math.hypot(b.x - hx, b.y - hy) < self.KICK_R:
                     kick(b, hx, hy, 0.8)
                     b.kick_cooldown = 1.2
+                    self.sfx.play("tick", 0.8, x=b.x / hm.size[0], pitch=float(self.rng.uniform(0.9, 1.1)))
                     break
         step(self.balls, self.slope, dt, self.phys)
         for b in list(self.balls):
@@ -369,7 +375,18 @@ class MinigolfGame(Game):
             pal = [[(1, 0.85, 0.2), (1, 1, 0.7)], [(1, 0.3, 0.7), (1, 0.8, 0.9)], [(0.3, 1, 1), (0.8, 1, 1)],
                    [(0.5, 1, 0.3), (1, 1, 1)]][int(self.rng.integers(0, 4))]
             self.sparks.burst(fw[1], fw[2], 70, 0.6, pal, life=1.4, rng=self.rng)
+            self.sfx.play("pop", 0.5, x=fw[1] / hm.size[0], pitch=float(self.rng.uniform(0.9, 1.15)))
         self.sparks.update(dt)
+        self._sounds(hm)
+
+    def _sounds(self, hm) -> None:
+        """Kutálení podle rychlosti nejrychlejšího míčku (stojící míček je tichý) a odložené zvuky."""
+        fast = max(self.balls, key=lambda b: b.speed, default=None)
+        if fast is not None and fast.speed > 0.03:
+            self.sfx.loop("roll", 0.7 * min(1.0, fast.speed / 0.6), x=fast.x / hm.size[0])
+        for item in [q for q in self._sfx_q if q[0] <= self.t]:
+            self._sfx_q.remove(item)
+            self.sfx.play(item[1], item[2], x=item[3])
 
     # --- kreslení ---------------------------------------------------------------------
     def render(self) -> None:
