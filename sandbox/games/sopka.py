@@ -539,6 +539,7 @@ class VolcanoGame(Game):
         self._particles(dt)
         self._burn_houses(hm)
         self._tremor(dt)
+        self._sound(dt)
         assert self.tex_lava is not None and self.tex_temp is not None and self.tex_heat is not None
         self.tex_lava.write(sim.thickness.tobytes())
         self.tex_temp.write(sim.temp.tobytes())
@@ -550,6 +551,55 @@ class VolcanoGame(Game):
         elif self._heat_on:
             self.tex_heat.write(np.zeros(sim.shape, np.float32).tobytes())
             self._heat_on = False
+
+    def _sound(self, dt: float) -> None:
+        """Zvuk podle fáze: dunění sílí k erupci, posledních 5 s pípá odpočet, výbuch, láva bublá,
+        dopady bomb, syčení při chladnutí, na konci výsledek."""
+        sfx = self.sfx
+        x = self.vent_m[0] / self.host.box_size[0]
+        prev = getattr(self, "_snd_phase", None)
+        self._snd_phase = self.phase
+        if prev is not None and prev != self.phase:
+            if self.phase == ERUPT:
+                sfx.play("boom", 1.0, x=x)
+                if prev == RUMBLE:
+                    sfx.play("go", 0.8)
+            elif self.phase == COOL:
+                sfx.play("hiss", 0.7, x=x)
+            elif self.phase == FADE and self.saved_last is not None:
+                s_, n_ = self.saved_last
+                sfx.play("fanfare" if s_ == n_ else "chime" if s_ else "fail", 0.9)
+        # odpočet: pípnutí při změně celé sekundy v posledních 5 s (5, 4, 3, 2, 1)
+        left = self._countdown_left()
+        if left is not None:
+            last = getattr(self, "_snd_left", None)
+            now = math.ceil(left)
+            if last is not None and now != last and 1 <= now <= 5:
+                sfx.play("beep", 0.8)
+            self._snd_left = now
+        else:
+            self._snd_left = None
+        # dunění země: od poloviny odpočtu sílí, při erupci drží, při chladnutí doznívá
+        if left is not None:
+            rumble = 0.9 * max(0.0, (self._wake_level() - 0.15) / 0.85)
+        elif self.phase == ERUPT:
+            rumble = 0.75 * (1.0 - 0.5 * self.phase_t / self.phase_len)
+        elif self.phase == COOL:
+            rumble = 0.3 * max(0.0, 1.0 - 2.0 * self.phase_t / self.phase_len)
+        else:
+            rumble = 0.0
+        sfx.loop("rumble", rumble, x=x)
+        # bublání lávy podle žhavé plochy (váženo teplotou – chladnoucí láva utichá)
+        sim = self.sim
+        if sim is not None and self.phase in (ERUPT, COOL, FADE):
+            hot = float(np.clip((sim.temp - sim.solid) / (1 - sim.solid), 0, 1).sum()) * sim.cell * sim.cell
+            sfx.loop("lava", min(1.0, hot / 0.15) * 0.85 * self.fade, x=x)
+        # dopad lávové bomby: jen občas (ne každá), nejvýš jednou za 2 s
+        landed = self.particles.landed
+        if len(landed) and self.clock - getattr(self, "_thud_t", -9.0) > 2.0 and self.rng.random() < 0.5:
+            self._thud_t = self.clock
+            sfx.play("thud", 0.55, x=float(landed[0][0]) / self.host.box_size[0],
+                     pitch=float(self.rng.uniform(0.85, 1.15)))
 
     def _countdown_left(self) -> float | None:
         """[s] do erupce (jen během odpočtu)."""
@@ -598,6 +648,9 @@ class VolcanoGame(Game):
                 win = (slice(max(0, iy - 1), iy + 2), slice(max(0, ix - 1), ix + 2))
                 if (sim.thickness[win] > 0.0012).any() and (sim.temp[win] > sim.solid).any():
                     h.flooded, h.flooded_at = True, self.clock
+                    if self.clock - getattr(self, "_burn_snd", -9.0) > 0.5:  # víc domů naráz = jeden zvuk
+                        self._burn_snd = self.clock
+                        self.sfx.play("burn", 0.9, x=h.x / W, pitch=float(self.rng.uniform(0.9, 1.1)))
 
     def _particles(self, dt: float) -> None:
         p = self.particles

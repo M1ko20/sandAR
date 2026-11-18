@@ -388,6 +388,7 @@ class TsunamiGame(Game):
         sim = self.sim
 
         self.phase_t += dt
+        self._sclock = getattr(self, "_sclock", 0.0) + dt  # hodiny pro rozestupy zvuků
         if self.phase_t >= self.phase_len:
             if self.phase == CALM and not self.auto:
                 self.phase_t = 0.0
@@ -451,6 +452,10 @@ class TsunamiGame(Game):
             self.flooded_pct = 100.0 * float(self.flood[self.land].sum()) / n_land if n_land else 0.0
             for i, (ty, tx) in enumerate(self.towns):
                 if sim.depth[ty, tx] > 0.004:
+                    if not self.town_flooded[i] and self._sclock - getattr(self, "_splash_t", -9.0) > 0.8:
+                        self._splash_t = self._sclock  # víc měst naráz = jedno šplouchnutí
+                        self.sfx.play("splash", 0.6, x=(tx + 0.5) / terrain.shape[1],
+                                      pitch=float(self.rng.uniform(0.9, 1.1)))
                     self.town_flooded[i] = True
 
         assert self.tex is not None
@@ -463,6 +468,42 @@ class TsunamiGame(Game):
         self.vel_tex.write(np.dstack([blur3(vx), blur3(vy), blur3(blur3(eta.astype(np.float32))),
                                       self.front]).astype(np.float32).tobytes())
         self._update_spray(dt, rise, vx, vy)
+        self._sound(v, flooded_now)
+
+    def _sound(self, v: np.ndarray, flooded_now: np.ndarray) -> None:
+        """Příboj v klidu, siréna při varování, náraz vlny, hukot vody na pevnině, výsledek."""
+        sfx = self.sfx
+        x = (0.1, 0.5, 0.9, 0.5)[self.edge]  # zvuk moře zní ze strany moře
+        prev = getattr(self, "_snd_phase", None)
+        self._snd_phase = self.phase
+        if prev is not None and prev != self.phase:
+            if self.phase == WARN:
+                sfx.play("alarm", 0.9, x=x)
+            elif self.phase == WAVE:
+                sfx.play("crash", 1.0, x=x)
+            elif self.phase == RESULT and self.last_result is not None:
+                _, saved, total = self.last_result
+                if total:
+                    sfx.play("fanfare" if saved == total else "chime" if saved else "fail", 0.9)
+        # odpočet: pípnutí 5 a 4 s před vlnou (pak už zní siréna varování)
+        if self.phase == CALM and self.auto:
+            now = math.ceil(self.phase_len - self.phase_t + DURATION[WARN])
+            last = getattr(self, "_snd_left", None)
+            if last is not None and now != last and now in (4, 5):
+                sfx.play("beep", 0.8)
+            self._snd_left = now
+        else:
+            self._snd_left = None
+        sfx.loop("sea", {CALM: 0.35, WARN: 0.45, RESULT: 0.3}.get(self.phase, 0.0), x=x)
+        if self.phase in (WAVE, RECEDE):
+            # hukot podle toho, jak rychle se voda valí po pevnině
+            k = self.phase_t / self.phase_len
+            if self.phase == WAVE:  # vlna: naplno, ke konci mírně slábne
+                roar = 0.95 * min(1.0, self.phase_t / 0.6) * (1.0 - 0.3 * k)
+            else:  # ústup: podle toho, jak rychle voda odtéká z pevniny
+                speed = float(v[flooded_now].mean()) if flooded_now.any() else 0.0
+                roar = 0.8 * max(0.3, min(1.0, speed / 0.25)) * math.sqrt(max(0.0, 1.0 - k))
+            sfx.loop("roar", roar, x=x)
 
     def _update_spray(self, dt: float, rise: np.ndarray, vx: np.ndarray, vy: np.ndarray) -> None:
         """Tříšť z čela vlny: bílé kapky vylétají po směru proudu a mizí."""
