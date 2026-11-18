@@ -18,6 +18,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+import cv2
 import numpy as np
 
 from ..render import hud
@@ -29,46 +30,53 @@ from .mesto import draw_house
 FRAG = """
 uniform sampler2D u_lava;
 uniform sampler2D u_temp;
+uniform sampler2D u_heat;  // rozmazané teplo lávy -> záře do okolí
 uniform vec2 u_vent;      // kráter v uv
 uniform float u_glow;     // 0..1 záře kráteru
 uniform float u_solid;    // teplota tuhnutí
 uniform float u_fade;     // 1 = láva viditelná, 0 = zmizela
+uniform float u_wake;     // 0..1 probouzení sopky (odpočet -> erupce)
+uniform float u_pulse;    // 0..1 otřes (pulz světla)
+uniform float u_shock;    // [s] od začátku erupce (< 0 = žádná tlaková vlna)
+uniform float u_erupt;    // 0..1 síla fontány v kráteru
 
-float hash12(vec2 p) {
+float sopka_hash(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
     return fract((p3.x + p3.y) * p3.z);
 }
-vec2 hash22(vec2 p) {
+vec2 sopka_hash2(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
     p3 += dot(p3, p3.yzx + 33.33);
     return fract((p3.xx + p3.yz) * p3.zy);
 }
-float vnoise(vec2 p) {
+float sopka_noise(vec2 p) {
     vec2 i = floor(p), f = fract(p);
     vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(mix(hash12(i), hash12(i + vec2(1, 0)), u.x),
-               mix(hash12(i + vec2(0, 1)), hash12(i + vec2(1, 1)), u.x), u.y);
+    return mix(mix(sopka_hash(i), sopka_hash(i + vec2(1, 0)), u.x),
+               mix(sopka_hash(i + vec2(0, 1)), sopka_hash(i + vec2(1, 1)), u.x), u.y);
 }
-// vzdálenost k hraně Voronoiovy buňky (pukliny v krustě)
-float crack_dist(vec2 p) {
+// Voronoi desky krusty: x = vzdálenost k hraně desky, y = náhodné číslo desky
+vec2 sopka_plates(vec2 p) {
     vec2 i = floor(p), f = fract(p);
     float d1 = 8.0, d2 = 8.0;
+    float id = 0.0;
     for (int y = -1; y <= 1; ++y)
         for (int x = -1; x <= 1; ++x) {
             vec2 g = vec2(x, y);
-            vec2 o = g + hash22(i + g) * 0.85 - f;
+            vec2 o = g + sopka_hash2(i + g) * 0.85 - f;
             float d = dot(o, o);
-            if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) { d2 = d; }
+            if (d < d1) { d2 = d1; d1 = d; id = sopka_hash(i + g + 0.37); } else if (d < d2) { d2 = d; }
         }
-    return sqrt(d2) - sqrt(d1);
+    return vec2(sqrt(d2) - sqrt(d1), id);
 }
 
-vec3 hot_color(float t) {   // t = 0 (tuhnutí) .. 1 (čerstvá láva)
-    vec3 c = mix(vec3(0.35, 0.02, 0.0), vec3(0.95, 0.10, 0.0), smoothstep(0.0, 0.3, t));
-    c = mix(c, vec3(1.0, 0.45, 0.0), smoothstep(0.25, 0.55, t));
-    c = mix(c, vec3(1.0, 0.85, 0.15), smoothstep(0.55, 0.8, t));
-    c = mix(c, vec3(1.0, 1.0, 0.8), smoothstep(0.82, 1.0, t));
+// žhavá láva: t = 0 (tuhne, tmavě rudá) .. 1 (čerstvá, žlutooranžová) – nikdy ne bílá
+vec3 sopka_hot(float t) {
+    vec3 c = mix(vec3(0.28, 0.02, 0.0), vec3(0.78, 0.06, 0.0), smoothstep(0.0, 0.3, t));
+    c = mix(c, vec3(0.95, 0.24, 0.0), smoothstep(0.25, 0.55, t));
+    c = mix(c, vec3(0.95, 0.45, 0.03), smoothstep(0.5, 0.8, t));
+    c = mix(c, vec3(0.95, 0.66, 0.16), smoothstep(0.85, 1.05, t));
     return c;
 }
 
@@ -76,20 +84,67 @@ void main() {
     vec2 uv = v_uv;
     vec2 pm = uv * u_box;   // metry
     float h = height_at(uv);
+    float shade = hillshade(uv, 3.0);
 
-    // --- sopečná krajina: tmavá, ale s čitelným reliéfem ---
+    // --- sopečná krajina: olivová údolí, hnědé svahy, popelavé vrcholy; reliéf čitelný ---
     float e = clamp((h - u_elev_min) / max(u_elev_max - u_elev_min, 1e-4), 0.0, 1.0);
-    vec3 c = mix(vec3(0.10, 0.24, 0.16), vec3(0.36, 0.25, 0.18), smoothstep(0.15, 0.5, e));
-    c = mix(c, vec3(0.50, 0.45, 0.43), smoothstep(0.5, 0.95, e));
-    c *= mix(0.45, 1.45, hillshade(uv, 3.0));
+    vec3 c = mix(vec3(0.17, 0.33, 0.15), vec3(0.46, 0.30, 0.18), smoothstep(0.15, 0.5, e));
+    c = mix(c, vec3(0.58, 0.52, 0.50), smoothstep(0.55, 0.95, e));
+    c *= mix(0.38, 1.45, shade);
     vec2 cl = contours(h);
-    c = mix(c, vec3(0.85, 0.30, 0.10), cl.y * 0.55 + cl.x * 0.25);
+    c = mix(c, c * 0.55, cl.x * 0.5);
+    c = mix(c, vec3(0.95, 0.42, 0.12), cl.y * 0.45);
+    // sopka se probouzí: krajina potemní a zčervená, ať vynikne žár
+    c *= 1.0 - 0.28 * u_wake;
+    c = mix(c, c * vec3(1.25, 0.75, 0.6), 0.5 * u_wake);
 
-    // --- záře kráteru ---
-    float rv = length((uv - u_vent) * u_box);
-    float glow = u_glow * exp(-rv * rv / (0.06 * 0.06));
-    c += vec3(1.0, 0.28, 0.02) * glow * 0.9;
-    c = mix(c, vec3(1.0, 0.9, 0.5), u_glow * (1.0 - smoothstep(0.012, 0.025, rv)));
+    vec2 dv = (uv - u_vent) * u_box;
+    float rv = length(dv);
+    // otřes: pulz světla od kráteru přes celou krajinu
+    c *= 1.0 + 0.22 * u_pulse;
+    c += vec3(0.35, 0.07, 0.0) * u_pulse * exp(-rv * rv / (0.22 * 0.22));
+
+    // --- světlo lávy na okolní krajinu ---
+    float hl = texture(u_heat, uv).r;
+    c = c * (1.0 + vec3(1.4, 0.45, 0.08) * hl) + vec3(0.55, 0.13, 0.0) * hl;
+
+    // --- kráter: žhnoucí jícen, pukliny se rozbíhají, jak se sopka probouzí ---
+    float ang = atan(dv.y, dv.x);
+    float NC = 9.0;
+    float fa = ang / 6.28318 * NC + (sopka_noise(vec2(rv * 22.0, 3.0)) - 0.5) * 0.9
+               + (sopka_noise(vec2(rv * 70.0, 9.0)) - 0.5) * 0.25;
+    float crack_id = floor(fa + 0.5);
+    float len = (0.035 + 0.22 * u_wake) * (0.55 + 0.45 * sopka_hash(vec2(crack_id, 1.7)));
+    float arc = abs(fract(fa + 0.5) - 0.5) / NC * 6.28318 * max(rv, 0.004);   // [m] od osy pukliny
+    float wdt = 0.0035 * (1.0 - 0.6 * smoothstep(0.0, len, rv));
+    float crack = (1.0 - smoothstep(wdt, wdt + 0.003, arc)) * (1.0 - smoothstep(len * 0.6, len, rv))
+                  * smoothstep(0.015, 0.03, rv) * smoothstep(0.05, 0.3, u_wake);
+    float halo = exp(-arc * arc / (0.012 * 0.012)) * (1.0 - smoothstep(len * 0.4, len, rv))
+                 * smoothstep(0.015, 0.03, rv) * smoothstep(0.05, 0.3, u_wake);
+    float beat = 0.7 + 0.3 * u_glow + 0.35 * u_pulse;
+    c += vec3(0.9, 0.18, 0.0) * halo * 0.6 * beat;
+    c = mix(c, sopka_hot(0.55 + 0.3 * u_pulse), crack * beat);
+    // jícen: tmavý okraj, uvnitř vře láva
+    float rim = exp(-pow((rv - 0.034) / 0.009, 2.0));
+    c = mix(c, vec3(0.10, 0.06, 0.05), rim * 0.55 * smoothstep(0.02, 0.2, u_glow));
+    float pool = 1.0 - smoothstep(0.018, 0.03, rv);
+    float churn = sopka_noise(pm * 60.0 + vec2(u_time * 0.7, -u_time * 0.5));
+    c = mix(c, sopka_hot(0.25 + 0.65 * u_glow * (0.7 + 0.3 * churn)), pool * clamp(u_glow * 1.3, 0.0, 1.0));
+    c += vec3(1.0, 0.30, 0.03) * u_glow * 0.55 * exp(-rv * rv / (0.07 * 0.07));
+
+    // --- fontána: žhavé jazyky stříkají z kráteru ---
+    if (u_erupt > 0.01) {
+        float jets = sopka_noise(vec2(ang * 5.0, rv * 18.0 - u_time * 7.0));
+        jets = smoothstep(0.45, 0.85, jets) * (1.0 - smoothstep(0.03, 0.03 + 0.10 * u_erupt, rv));
+        float core = 1.0 - smoothstep(0.02, 0.045 + 0.015 * u_erupt, rv);
+        c = mix(c, sopka_hot(0.9), clamp(core + jets, 0.0, 1.0) * u_erupt);
+    }
+    // tlaková vlna na začátku erupce
+    if (u_shock >= 0.0 && u_shock < 1.6) {
+        float R = 0.05 + u_shock * 0.45;
+        float ring = exp(-pow((rv - R) / 0.03, 2.0)) * (1.0 - u_shock / 1.6);
+        c = mix(c, vec3(1.0, 0.55, 0.15), ring * 0.8);
+    }
 
     // --- láva ---
     float th = sample_bicubic(u_lava, uv);
@@ -97,28 +152,38 @@ void main() {
     if (a > 0.001) {
         float T = texture(u_temp, uv).r;
         float tn = clamp((T - u_solid) / (1.0 - u_solid), 0.0, 1.0);
-        // tekoucí povrch: šum unášený po svahu
+        // povrch teče po spádu: krusta (desky) unášená proudem, dvě fáze se střídají
         vec2 g = height_grad(uv);
-        vec2 flow = -g / max(length(g), 0.05);
-        vec2 perp = vec2(-flow.y, flow.x);
-        vec2 q = vec2(dot(pm, flow), dot(pm, perp));
-        float n = vnoise(vec2(q.x * 30.0 - u_time * 1.2 * tn, q.y * 70.0)) * 0.65
-                + vnoise(pm * 55.0 + u_time * 0.4) * 0.35;
-        // tenké okraje a čela proudů jsou chladnější (tmavší)
-        float tv = tn * mix(0.45, 1.0, smoothstep(0.0008, 0.008, th));
-        vec3 hot = hot_color(tv * (0.75 + 0.45 * n));
-        // krusta: desky (Voronoi) s žhnoucími puklinami; čím chladnější, tím víc krusty
-        float cd = crack_dist(pm * 38.0 + vec2(3.1, 7.7));
-        float crust = smoothstep(0.62, 0.15, tn);
-        float plate = smoothstep(0.04, 0.16, cd);
-        vec3 rock = vec3(0.07, 0.055, 0.05) * mix(0.7, 1.3, hillshade(uv, 3.0)) * (0.8 + 0.4 * n);
-        float heat = smoothstep(0.02, u_solid + 0.12, T);          // zbytkové teplo v puklinách
-        vec3 crack = hot_color(0.25 * heat) * heat * (0.75 + 0.25 * sin(u_time * 3.0 + n * 6.0));
-        vec3 lc = mix(hot, mix(crack, rock, plate), crust);
-        if (T <= u_solid) lc = mix(crack, rock, plate);
+        float slope = length(g);
+        vec2 flow = -g / max(slope, 0.05);
+        float spd = tn * (0.006 + 0.04 * clamp(slope / 0.4, 0.0, 1.0));
+        const float P = 2.2;
+        const float K = 34.0;   // desky ~3 cm
+        float ph0 = fract(u_time / P), ph1 = fract(u_time / P + 0.5);
+        float wgt = abs(ph0 * 2.0 - 1.0);
+        vec2 s0 = sopka_plates((pm - flow * spd * ph0 * P) * K);
+        vec2 s1 = sopka_plates((pm - flow * spd * ph1 * P) * K + vec2(5.3, 1.7));
+        float n0 = sopka_noise((pm - flow * spd * ph0 * P) * 45.0);
+        float n1 = sopka_noise((pm - flow * spd * ph1 * P) * 45.0 + 7.0);
+        vec2 pl = mix(s0, s1, wgt);
+        float n = mix(n0, n1, wgt);
+
+        // tenké okraje a čela proudů jsou chladnější
+        float tv = tn * mix(0.5, 1.0, smoothstep(0.0008, 0.008, th));
+        vec3 molten = sopka_hot(tv * (0.68 + 0.36 * n));
+        // horká láva: jen ostrůvky tmavé kůže mezi širokými žhavými kanály; chladná: souvislá krusta
+        float gap = mix(0.05, 0.30, smoothstep(0.1, 0.9, tn));
+        float cover = mix(1.05, 0.62, smoothstep(0.2, 0.95, tn));
+        float skin = smoothstep(gap, gap + 0.07, pl.x) * smoothstep(cover, cover - 0.15, pl.y);
+        vec3 rock = vec3(0.22, 0.19, 0.18) * mix(0.55, 1.35, shade) * (0.8 + 0.2 * smoothstep(0.05, 0.3, pl.x));
+        vec3 crust = mix(rock, vec3(0.42, 0.07, 0.02), smoothstep(0.0, 0.8, tn) * 0.9);
+        // zbytkové teplo v puklinách ztuhlé lávy
+        float heat = smoothstep(0.02, u_solid + 0.12, T);
+        vec3 ember = sopka_hot(0.28 * heat) * heat * (0.8 + 0.2 * sin(u_time * 2.0 + n * 6.0));
+        vec3 glowc = mix(ember, molten, smoothstep(0.0, 0.12, tn));
+        vec3 lc = mix(glowc, crust, skin);
+        if (T <= u_solid) lc = mix(ember, rock, smoothstep(0.03, 0.09, pl.x));
         c = mix(c, lc, a);
-        // horká láva svítí do okolí i přes okraj
-        c += vec3(1.0, 0.3, 0.0) * 0.25 * a * tn;
     }
     f_color = vec4(c, 1.0);
 }
@@ -214,15 +279,25 @@ def build_village(name: str, x: float, y: float, rng: np.random.Generator, n_hou
     return Village(name, x, y, houses)
 
 
+SMOKE, EMBER, BOMB, STEAM = 0, 1, 2, 3
+GRAVITY = 9.81 * 0.35  # [m/s²] zpomalený pád úlomků (fontána je dobře vidět)
+
+
 class Particles:
-    """Jednoduché částice (kouř, žhavé úlomky) v metrech bedny."""
+    """Částice v metrech bedny: kouř/popel, pára, žhavé úlomky a lávové bomby.
+
+    Úlomky letí balisticky – ``z`` je výška nad pískem (vykreslí se větší, jak jsou blíž projektoru),
+    po dopadu se zastaví a dohasínají."""
 
     def __init__(self) -> None:
         self.pos = np.zeros((0, 2), np.float32)
         self.vel = np.zeros((0, 2), np.float32)
         self.age = np.zeros(0, np.float32)
         self.life = np.zeros(0, np.float32)
-        self.kind = np.zeros(0, np.int8)  # 0 kouř, 1 úlomek
+        self.kind = np.zeros(0, np.int8)
+        self.z = np.zeros(0, np.float32)
+        self.vz = np.zeros(0, np.float32)
+        self.landed: np.ndarray = np.zeros((0, 2), np.float32)  # kde tento krok dopadly bomby
 
     def __len__(self) -> int:
         return len(self.age)
@@ -230,7 +305,7 @@ class Particles:
     def clear(self) -> None:
         self.__init__()  # type: ignore[misc]
 
-    def spawn(self, pos, vel, life, kind: int) -> None:
+    def spawn(self, pos, vel, life, kind: int, vz=None) -> None:
         n = len(life)
         if n == 0:
             return
@@ -239,19 +314,37 @@ class Particles:
         self.age = np.concatenate([self.age, np.zeros(n, np.float32)])
         self.life = np.concatenate([self.life, np.asarray(life, np.float32)])
         self.kind = np.concatenate([self.kind, np.full(n, kind, np.int8)])
+        self.z = np.concatenate([self.z, np.zeros(n, np.float32)])
+        vz = np.zeros(n, np.float32) if vz is None else np.asarray(vz, np.float32).reshape(n)
+        self.vz = np.concatenate([self.vz, vz])
+
+    def keep(self, keep) -> None:
+        self.pos, self.vel, self.age, self.life = self.pos[keep], self.vel[keep], self.age[keep], self.life[keep]
+        self.kind, self.z, self.vz = self.kind[keep], self.z[keep], self.vz[keep]
 
     def update(self, dt: float, wind: np.ndarray) -> None:
+        self.landed = np.zeros((0, 2), np.float32)
         if not len(self):
             return
-        smoke = self.kind == 0
-        self.vel[smoke] += (wind - self.vel[smoke]) * min(1.0, 0.8 * dt)
-        self.vel[~smoke] *= max(0.0, 1.0 - 1.8 * dt)
+        gas = (self.kind == SMOKE) | (self.kind == STEAM)
+        self.vel[gas] += (wind - self.vel[gas]) * min(1.0, 0.8 * dt)
+        solid = ~gas
+        air = solid & ((self.z > 0) | (self.vz > 0))
+        ground = solid & ~air
+        self.vel[air] *= max(0.0, 1.0 - 0.25 * dt)
+        self.vel[ground] *= max(0.0, 1.0 - 9.0 * dt)
+        self.vz[air] -= GRAVITY * dt
+        self.z[air] += self.vz[air] * dt
+        hit = air & (self.z <= 0)
+        if hit.any():
+            self.z[hit] = 0.0
+            self.vz[hit] = 0.0
+            self.landed = self.pos[hit & (self.kind == BOMB)].copy()
         self.pos += self.vel * dt
         self.age += dt
         keep = self.age < self.life
         if not keep.all():
-            self.pos, self.vel, self.age = self.pos[keep], self.vel[keep], self.age[keep]
-            self.life, self.kind = self.life[keep], self.kind[keep]
+            self.keep(keep)
 
 
 def disc_triangles(centers: np.ndarray, radii: np.ndarray, colors: np.ndarray, segments: int = 12):
@@ -292,6 +385,10 @@ class VolcanoGame(Game):
         self.sim: LavaSim | None = None
         self.tex_lava = None
         self.tex_temp = None
+        self.tex_heat = None
+        self._heat_on = False
+        self._tremor_ph = 0.0
+        self.pulse = 0.0
         self.rough: np.ndarray | None = None
         self.particles = Particles()
         self.rng = np.random.default_rng()
@@ -315,10 +412,10 @@ class VolcanoGame(Game):
 
     def stop(self) -> None:
         self.prog.release()
-        for t in (self.tex_lava, self.tex_temp):
+        for t in (self.tex_lava, self.tex_temp, self.tex_heat):
             if t is not None:
                 t.release()
-        self.tex_lava = self.tex_temp = None
+        self.tex_lava = self.tex_temp = self.tex_heat = None
 
     def reset(self) -> None:
         if self.sim is not None:
@@ -395,11 +492,13 @@ class VolcanoGame(Game):
             rng = np.random.default_rng(7)
             # drobná nerovnost terénu: láva se větví do jazyků místo dokonalých kruhů
             self.rough = blur3(rng.normal(0, 1, shape).astype(np.float32)) * 0.004
-            for t in (self.tex_lava, self.tex_temp):
+            for t in (self.tex_lava, self.tex_temp, self.tex_heat):
                 if t is not None:
                     t.release()
             self.tex_lava = self.host.float_texture((shape[1], shape[0]))
             self.tex_temp = self.host.float_texture((shape[1], shape[0]))
+            self.tex_heat = self.host.float_texture((shape[1], shape[0]), np.zeros(shape, np.float32))
+            self._heat_on = False
             self._choose_vent(hm)
         sim = self.sim
         assert self.rough is not None
@@ -442,9 +541,49 @@ class VolcanoGame(Game):
             sim.advance(terrain, dt)
         self._particles(dt)
         self._burn_houses(hm)
-        assert self.tex_lava is not None and self.tex_temp is not None
+        self._tremor(dt)
+        assert self.tex_lava is not None and self.tex_temp is not None and self.tex_heat is not None
         self.tex_lava.write(sim.thickness.tobytes())
         self.tex_temp.write(sim.temp.tobytes())
+        if sim.thickness.any():  # žhavá láva svítí do okolí (rozmazané teplo, ~5 cm)
+            hot = np.clip((sim.temp - sim.solid) / (1 - sim.solid), 0, 1) * np.clip(sim.thickness / 0.002, 0, 1)
+            heat = cv2.GaussianBlur(hot, (0, 0), 0.05 / sim.cell) * (1.8 * self.fade)
+            self.tex_heat.write(np.ascontiguousarray(heat, np.float32).tobytes())
+            self._heat_on = True
+        elif self._heat_on:
+            self.tex_heat.write(np.zeros(sim.shape, np.float32).tobytes())
+            self._heat_on = False
+
+    def _countdown_left(self) -> float | None:
+        """[s] do erupce (jen během odpočtu)."""
+        if self.phase == CALM and self.auto:
+            return self.phase_len - self.phase_t + DURATION[RUMBLE]
+        if self.phase == RUMBLE:
+            return self.phase_len - self.phase_t
+        return None
+
+    def _wake_level(self) -> float:
+        """0..1 jak moc je sopka probuzená (pukliny, potemnění krajiny)."""
+        left = self._countdown_left()
+        if left is not None:
+            return float(np.clip(1.0 - left / COUNTDOWN, 0.0, 1.0)) ** 1.3
+        if self.phase == ERUPT:
+            return 1.0
+        if self.phase == COOL:
+            return max(0.0, 1.0 - self.phase_t / self.phase_len)
+        return 0.0
+
+    def _tremor(self, dt: float) -> None:
+        """Otřesy = pulzy světla; zrychlují se k erupci (nejvýš ~2 Hz, žádné blikání)."""
+        left = self._countdown_left()
+        amp, freq = 0.0, 1.0
+        if left is not None and left < 8.0:
+            u = 1.0 - left / 8.0
+            amp, freq = 0.35 + 0.65 * u, 0.7 + 1.3 * u
+        elif self.phase == ERUPT:
+            amp, freq = 0.8 * (1.0 - 0.6 * self.phase_t / self.phase_len), 1.1
+        self._tremor_ph += dt * freq
+        self.pulse = amp * math.exp(-(self._tremor_ph % 1.0) * 5.0)
 
     def _burn_houses(self, hm) -> None:
         """Dům, pod kterým je horká láva, shoří."""
@@ -467,23 +606,75 @@ class VolcanoGame(Game):
         p = self.particles
         rng = self.rng
         vx, vy = self.vent_m
-        smoke_rate = {CALM: 1.5, RUMBLE: 6.0, ERUPT: 6.0, COOL: 3.0, FADE: 1.0}[self.phase]
+        ph = self.phase
+        # dým z kráteru (při erupci hustý sloup popela), v klidu jen pára
+        smoke_rate = {CALM: 1.0, RUMBLE: 7.0, ERUPT: 14.0, COOL: 4.0, FADE: 1.0}[ph]
         n = rng.poisson(smoke_rate * dt)
         if n:
             ang = rng.uniform(0, 2 * math.pi, n)
-            p.spawn(np.stack([vx + 0.01 * np.cos(ang), vy + 0.01 * np.sin(ang)], 1),
-                    np.stack([0.04 * np.cos(ang), 0.04 * np.sin(ang)], 1), rng.uniform(2.5, 5.0, n), 0)
-        ember_rate = {RUMBLE: 10.0 * self.phase_t / DURATION[RUMBLE], ERUPT: 60.0 * self.power}.get(self.phase, 0.0)
+            sp = rng.uniform(0.02, 0.07 if ph == ERUPT else 0.04, n)
+            p.spawn(np.stack([vx + 0.012 * np.cos(ang), vy + 0.012 * np.sin(ang)], 1),
+                    np.stack([sp * np.cos(ang), sp * np.sin(ang)], 1), rng.uniform(3.0, 6.0, n), SMOKE)
+        if ph == CALM:
+            n = rng.poisson(2.0 * dt)
+            if n:
+                ang = rng.uniform(0, 2 * math.pi, n)
+                p.spawn(np.stack([vx + 0.01 * np.cos(ang), vy + 0.01 * np.sin(ang)], 1),
+                        np.stack([0.03 * np.cos(ang), 0.03 * np.sin(ang)], 1), rng.uniform(2.0, 3.5, n), STEAM)
+        # žhavé úlomky: při probouzení občas vyprskne, při erupci fontána
+        if ph == RUMBLE:
+            ember_rate = 6.0 + 30.0 * self.phase_t / DURATION[RUMBLE]
+            speed, vz = (0.03, 0.15), (0.4, 1.0)
+        elif ph == ERUPT:
+            k = self.phase_t / self.phase_len
+            ember_rate = 110.0 * self.power * (0.55 + 0.45 * self._fountain()) * (1.0 - 0.5 * k)
+            speed, vz = (0.04, 0.32), (0.9, 2.1)
+        else:
+            ember_rate = 0.0
         n = rng.poisson(ember_rate * dt)
         if n:
             ang = rng.uniform(0, 2 * math.pi, n)
-            sp = rng.uniform(0.08, 0.45, n) * (1.0 if self.phase == ERUPT else 0.4)
-            p.spawn(np.stack([np.full(n, vx), np.full(n, vy)], 1), np.stack([sp * np.cos(ang), sp * np.sin(ang)], 1),
-                    rng.uniform(0.4, 1.4, n), 1)
-        if len(p) > 600:
-            keep = slice(len(p) - 600, None)
-            p.pos, p.vel, p.age, p.life, p.kind = p.pos[keep], p.vel[keep], p.age[keep], p.life[keep], p.kind[keep]
+            sp = rng.uniform(*speed, n)
+            p.spawn(np.stack([vx + 0.01 * np.cos(ang), vy + 0.01 * np.sin(ang)], 1),
+                    np.stack([sp * np.cos(ang), sp * np.sin(ang)], 1), rng.uniform(1.3, 2.4, n), EMBER,
+                    vz=rng.uniform(*vz, n))
+        if ph == ERUPT:  # lávové bomby: velké kusy letí dál
+            n = rng.poisson(5.0 * self.power * dt)
+            if n:
+                ang = rng.uniform(0, 2 * math.pi, n)
+                sp = rng.uniform(0.12, 0.38, n)
+                p.spawn(np.stack([np.full(n, vx), np.full(n, vy)], 1), np.stack([sp * np.cos(ang), sp * np.sin(ang)], 1),
+                        rng.uniform(3.0, 4.0, n), BOMB, vz=rng.uniform(1.4, 2.3, n))
+        # hořící domy kouří
+        for v in self.villages:
+            for h in v.houses:
+                if h.flooded and self.clock - h.flooded_at < 8.0 and rng.random() < 2.5 * dt:
+                    p.spawn([[h.x, h.y]], [[0.0, 0.0]], [rng.uniform(2.5, 4.0)], SMOKE)
+        # chladnoucí láva dýmá
+        sim = self.sim
+        if sim is not None and ph in (ERUPT, COOL):
+            n = rng.poisson(5.0 * dt)
+            if n:
+                cells = np.flatnonzero(sim.molten)
+                if len(cells):
+                    pick = rng.choice(cells, n)
+                    sh, sw = sim.shape
+                    iy, ix = np.divmod(pick, sw)
+                    pos = np.stack([(ix + 0.5) * sim.cell, (iy + 0.5) * sim.cell], 1)
+                    p.spawn(pos, np.zeros((n, 2)), rng.uniform(1.5, 2.5, n), STEAM)
+        if len(p) > 900:
+            p.keep(slice(len(p) - 900, None))
         p.update(dt, getattr(self, "wind", np.zeros(2, np.float32)))
+        if len(p.landed):  # bomba dopadla: obláček prachu
+            m = len(p.landed)
+            ang = rng.uniform(0, 2 * math.pi, m)
+            p.spawn(p.landed, np.stack([0.03 * np.cos(ang), 0.03 * np.sin(ang)], 1), rng.uniform(1.0, 1.8, m), SMOKE)
+
+    def _fountain(self) -> float:
+        """0..1 pulzování fontány v kráteru."""
+        if self.phase != ERUPT:
+            return 0.0
+        return 0.5 + 0.5 * math.sin(self.phase_t * 5.3) * math.sin(self.phase_t * 1.7 + 1)
 
     # --- kreslení --------------------------------------------------------------------
     def _glow(self) -> float:
@@ -499,16 +690,24 @@ class VolcanoGame(Game):
             return max(0.15, 0.8 * (1 - self.phase_t / self.phase_len))
         return 0.12
 
+    def _erupt_level(self) -> float:
+        if self.phase != ERUPT:
+            return 0.0
+        return (0.6 + 0.4 * self._fountain()) * (1.0 - 0.5 * self.phase_t / self.phase_len)
+
     def render(self) -> None:
         if self.tex_lava is None or self.sim is None:
             return
         bw, bh = self.host.box_size
         self.host.draw_fullscreen(self.prog, u_lava=(self.tex_lava, 1), u_temp=(self.tex_temp, 2),
                                   u_vent=(self.vent_m[0] / bw, self.vent_m[1] / bh), u_glow=float(self._glow()),
-                                  u_solid=float(self.sim.solid), u_fade=float(self.fade))
+                                  u_solid=float(self.sim.solid), u_fade=float(self.fade), u_heat=(self.tex_heat, 3),
+                                  u_wake=float(self._wake_level()), u_pulse=float(self.pulse),
+                                  u_shock=float(self.phase_t if self.phase == ERUPT else -1.0),
+                                  u_erupt=float(self._erupt_level()))
         self._draw_villages()
         self._draw_particles()
-        self.host.glow(1.0, 0.5)
+        self.host.glow(0.75, 0.6)
         self._draw_marker()
         self._labels()
 
@@ -523,7 +722,9 @@ class VolcanoGame(Game):
         t = self.host.time
         urgent = self.phase == RUMBLE
         r = 0.07 * sx
-        col = (1.0, 0.35, 0.1, 1) if urgent and int(t * 4) % 2 else (1.0, 0.8, 0.2, 1)
+        # s otřesy (pulz) žlutá přechází do rudé – plynule, bez blikání
+        u = min(1.0, self.pulse) if urgent else 0.0
+        col = (1.0, 0.8 - 0.45 * u, 0.2 - 0.1 * u, 1)
         w = max(4.0, canvas[1] / 110)
         p.circle(x, y, r, (0, 0, 0, 0.6), width=w * 2.2)
         p.circle(x, y, r, col, width=w)
@@ -549,27 +750,78 @@ class VolcanoGame(Game):
                       bg=(0, 0, 0, 0.45))
 
     def _draw_particles(self) -> None:
+        """Kouř, pára, žhavé úlomky se stopou a lávové bomby – vše jedním voláním painteru."""
         p = self.particles
         if not len(p):
             return
         cw, ch = self.host.canvas_size
         bw, bh = self.host.box_size
+        scale = np.array([cw / bw, ch / bh], np.float32)
+        ppm = cw / bw
         k = np.clip(p.age / p.life, 0, 1)
-        centers = p.pos * np.array([cw / bw, ch / bh], np.float32)
-        px_per_m = cw / bw
-        cols = np.zeros((len(p), 4), np.float32)
-        radii = np.zeros(len(p), np.float32)
-        smoke = p.kind == 0
-        ks = k[smoke]
-        radii[smoke] = (0.012 + 0.05 * np.sqrt(ks)) * px_per_m
-        grey = 0.55 - 0.25 * ks
-        cols[smoke] = np.stack([grey, grey * 0.95, grey * 0.92, 0.22 * (1 - ks) * np.minimum(1, ks * 8)], 1)
-        ke = k[~smoke]
-        radii[~smoke] = (0.006 * (1 - 0.5 * ke)) * px_per_m
-        cols[~smoke] = np.stack([np.ones_like(ke), 0.9 - 0.75 * ke, 0.35 * (1 - ke) ** 2, 1 - ke**3], 1)
-        order = np.argsort(p.kind, kind="stable")  # kouř pod úlomky
-        verts, colors = disc_triangles(centers[order], radii[order], cols[order])
-        self.host.painter.triangles(verts, colors)
+        centers = p.pos * scale
+        verts, colors = [], []
+
+        gas = (p.kind == SMOKE) | (p.kind == STEAM)
+        gi = np.flatnonzero(gas)
+        if len(gi):
+            kk = k[gi]
+            smoke = p.kind[gi] == SMOKE
+            r = np.where(smoke, 0.016 + 0.085 * np.sqrt(kk), 0.010 + 0.04 * np.sqrt(kk)) * ppm
+            grey = np.where(smoke, 0.40 - 0.16 * kk, 0.88)
+            alpha = np.where(smoke, 0.45, 0.24) * (1 - kk) * np.minimum(1, kk * 6)
+            col = np.stack([grey, grey * 0.96, grey * 0.94], 1)
+            # sloup dýmu nad kráterem je podsvícený žárem
+            d = np.hypot(*(p.pos[gi] - np.array(self.vent_m, np.float32)).T)
+            lit = (min(1.0, self._glow()) * np.exp(-(d / 0.13) ** 2) * smoke)[:, None]
+            col = col * (1 - 0.6 * lit) + lit * np.array([1.0, 0.33, 0.06]) * 0.85
+            v, c = disc_triangles(centers[gi], r, np.column_stack([col, alpha]).astype(np.float32), 14)
+            verts.append(v)
+            colors.append(c)
+
+        si = np.flatnonzero(~gas)
+        if len(si):
+            z, kk = p.z[si], k[si]
+            bomb = p.kind[si] == BOMB
+            air = z > 0
+            # dopadlé dohasínají z oranžové do rudé
+            heat = np.where(air, 1.0, np.clip((1 - kk) * 2.0, 0, 1))
+            r = np.where(bomb, 0.011, 0.0058) * ppm * (1 + 1.4 * z)
+            ember = np.stack([np.ones_like(heat), 0.15 + 0.5 * heat ** 1.5, 0.02 + 0.16 * heat ** 3,
+                              np.clip(heat * 1.5, 0, 1)], 1).astype(np.float32)
+            # stopa letících úlomků (protažená po směru letu)
+            fly = np.flatnonzero(air)
+            if len(fly):
+                vel = p.vel[si][fly] * scale
+                spd = np.linalg.norm(vel, axis=1, keepdims=True)
+                dirv = vel / np.maximum(spd, 1e-6)
+                nrm = np.stack([-dirv[:, 1], dirv[:, 0]], 1)
+                head = centers[si][fly]
+                rr = r[fly, None]
+                tail = head - dirv * (spd * 0.10 + rr * 2)
+                tri = np.stack([head + nrm * rr * 0.8, head - nrm * rr * 0.8, tail], 1).reshape(-1, 2)
+                tc = np.repeat(ember[fly], 3, axis=0)
+                tc[2::3, 3] = 0.0
+                tc[0::3, 3] *= 0.75
+                tc[1::3, 3] *= 0.75
+                verts.append(tri)
+                colors.append(tc)
+            order = np.argsort(air, kind="stable")  # dopadlé pod letícími
+            sel = si[order]
+            # žhnoucí obal
+            v, c = disc_triangles(centers[sel], r[order] * 1.35, ember[order], 10)
+            verts.append(v)
+            colors.append(c)
+            # bomby: tmavé jádro s žhnoucím okrajem
+            b = order[bomb[order]]
+            if len(b):
+                core = np.tile(np.array([[0.30, 0.09, 0.04, 1.0]], np.float32), (len(b), 1))
+                core[:, 3] = np.clip(heat[b] * 1.5, 0, 0.9)  # dopadlá bomba splyne s lávou
+                v, c = disc_triangles(centers[si][b], r[b] * 0.65, core, 10)
+                verts.append(v)
+                colors.append(c)
+        if verts:
+            self.host.painter.triangles(np.concatenate(verts), np.concatenate(colors))
 
     def _labels(self) -> None:
         p = self.host.painter
@@ -604,7 +856,8 @@ class VolcanoGame(Game):
         elif self.phase == ERUPT:
             if self.phase_t < 3.0:
                 top = "ERUPCE!"
-                color = (1.0, 0.35, 0.1, 1) if int(self.phase_t * 4) % 2 else (1.0, 0.9, 0.3, 1)
+                u = 0.5 + 0.5 * math.cos(self.phase_t * 2 * math.pi * 1.5)
+                color = (1.0, 0.35 + 0.55 * u, 0.1 + 0.2 * u, 1)
                 size = int(size * 1.4)
             else:
                 top = "Láva teče z kopce dolů"

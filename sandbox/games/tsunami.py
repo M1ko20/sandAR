@@ -23,26 +23,39 @@ from .base import Game
 
 FRAG = """
 uniform sampler2D u_state;   // r = hloubka vody, g = pěna, b = mokrý písek, a = zatopeno při vlně
-uniform sampler2D u_vel;     // rychlost vody [m/s] (rg)
+uniform sampler2D u_vel;     // rg = rychlost vody [m/s], b = vzdutí hladiny nad moře [m], a = čelo vlny 0..1
 uniform float u_sea;         // hladina moře [m]
-uniform float u_flash;       // 0..1 červené varování
+uniform float u_flash;       // 0..1 poplach (plynulý pulz)
 uniform vec4 u_edge;         // strana moře (levá, horní, pravá, dolní) – jedna jednička
 uniform float u_show_flood;  // 0..1 vyznačit zatopenou pevninu
+uniform float u_warn;        // 0..1 průběh varování (vlna roste na obzoru)
 
-float hash12(vec2 p) {
+float tsu_hash(vec2 p) {
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
     return fract((p3.x + p3.y) * p3.z);
 }
-float vnoise(vec2 p) {
+float tsu_noise(vec2 p) {
     vec2 i = floor(p), f = fract(p);
     vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(mix(hash12(i), hash12(i + vec2(1, 0)), u.x),
-               mix(hash12(i + vec2(0, 1)), hash12(i + vec2(1, 1)), u.x), u.y);
+    return mix(mix(tsu_hash(i), tsu_hash(i + vec2(1, 0)), u.x),
+               mix(tsu_hash(i + vec2(0, 1)), tsu_hash(i + vec2(1, 1)), u.x), u.y);
+}
+// dvě pootočené vrstvy šumu – bez čtverečkové struktury hodnotového šumu
+float tsu_noise2(vec2 p) {
+    return 0.5 * (tsu_noise(p) + tsu_noise(mat2(0.8, -0.6, 0.6, 0.8) * p * 1.37 + 17.3));
+}
+// pěna unášená proudem (dvě fáze se střídají, ať se vzor netrhá); velké chuchvalce, ne zrnitý šum
+float tsu_foam(vec2 pm, vec2 vel) {
+    const float P = 1.4;
+    float p0 = fract(u_time / P), p1 = fract(u_time / P + 0.5);
+    float a = tsu_noise2((pm - vel * p0 * P) * 26.0) * 0.65 + tsu_noise2((pm - vel * p0 * P) * 9.0 + 3.1) * 0.35;
+    float b = tsu_noise2((pm - vel * p1 * P) * 26.0 + 11.7) * 0.65 + tsu_noise2((pm - vel * p1 * P) * 9.0 + 8.3) * 0.35;
+    return mix(a, b, abs(p0 * 2.0 - 1.0));
 }
 
 // bikubická interpolace všech 4 kanálů (hladké okraje vody i na hrubé mřížce simulace)
-vec4 bicubic4(sampler2D tex, vec2 uv) {
+vec4 tsu_bicubic4(sampler2D tex, vec2 uv) {
     vec2 size = vec2(textureSize(tex, 0));
     vec2 inv = 1.0 / size;
     vec2 tc = uv * size - 0.5;
@@ -59,19 +72,21 @@ vec4 bicubic4(sampler2D tex, vec2 uv) {
     return mix(mix(s3, s2, sx), mix(s1, s0, sx), sy);
 }
 
-// dvě pootočené vrstvy šumu – bez čtverečkové struktury hodnotového šumu
-float noise2(vec2 p) {
-    return 0.5 * (vnoise(p) + vnoise(mat2(0.8, -0.6, 0.6, 0.8) * p * 1.37 + 17.3));
-}
-
 void main() {
     vec2 uv = v_uv;
     vec2 pm = uv * u_box;
     float h = height_at(uv);
-    vec4 st = max(bicubic4(u_state, uv), 0.0);
+    vec4 st = max(tsu_bicubic4(u_state, uv), 0.0);
     float w = st.r;
     float foam = st.g;
     float wet = st.b;
+
+    // vzdálenost od strany moře [m] a souřadnice podél pobřeží
+    float d = 10.0, along = pm.y;
+    if (u_edge.x > 0.5) d = pm.x;
+    if (u_edge.y > 0.5) { d = pm.y; along = pm.x; }
+    if (u_edge.z > 0.5) d = u_box.x - pm.x;
+    if (u_edge.w > 0.5) { d = u_box.y - pm.y; along = pm.x; }
 
     // --- pevnina ---
     float e = (h - u_sea) / max(u_elev_max - u_sea, 1e-4);
@@ -80,26 +95,67 @@ void main() {
     vec2 cl = contours(h);
     c = mix(c, c * 0.45, cl.y * 0.6 + cl.x * 0.25);
     c = mix(c, c * vec3(0.45, 0.42, 0.40), wet * 0.7);            // mokrý písek po vlně
-    // zatopená pevnina po vlně – červené šrafování
-    float stripe = step(0.5, fract((pm.x + pm.y) * 28.0));
-    c = mix(c, mix(c, vec3(1.0, 0.15, 0.1), 0.55 + 0.25 * stripe), u_show_flood * st.a);
 
-    // --- voda: sdílené vykreslení (proud unáší vlnky, mělčiny průhledné) + rozbitá pěna vlny ---
-    vec2 vel = texture(u_vel, uv).rg;
-    float n = noise2(pm * 90.0 + u_time * vec2(1.3, -0.9)) * 0.5 + noise2(pm * 30.0 - u_time * 0.5) * 0.5;
-    float f = smoothstep(0.3, 0.7, foam * (0.5 + 0.8 * n));
+    // zatopená pevnina po vlně: bahnitá a rudě prosvícená, pruhy pomalu plují, žlutý okraj zátopy
+    float fl = u_show_flood * smoothstep(0.25, 0.6, st.a);
+    vec3 mud = c * vec3(0.55, 0.48, 0.42) + vec3(0.10, 0.04, 0.02);
+    float stripe = smoothstep(0.18, 0.26, abs(fract((pm.x + pm.y) * 11.0 - u_time * 0.25) - 0.5));
+    vec3 red = mix(vec3(0.95, 0.12, 0.08), vec3(1.0, 0.32, 0.18), stripe) * (0.92 + 0.08 * sin(u_time * 2.2));
+    c = mix(c, mix(mud, red, 0.62), fl);
+    float ga = st.a - 0.5;
+    float border = 1.0 - smoothstep(1.4, 2.8, abs(ga) / max(fwidth(ga), 1e-4));
+    c = mix(c, vec3(1.0, 0.85, 0.25), border * u_show_flood);
+
+    // --- voda: sdílené vykreslení + velká pěna vlny ---
+    vec4 vt = texture(u_vel, uv);
+    vec2 vel = vt.rg;
+    float eta = max(vt.b, 0.0);
+    float front = vt.a;
+    float n = tsu_foam(pm, vel);
+    float f = smoothstep(0.45, 0.8, foam * (0.1 + 1.05 * n));
     vec4 wr = water_shade(c, uv, w, vel, f);
-    c = mix(wr.rgb, wr.rgb * vec3(0.78, 0.85, 0.95), smoothstep(0.05, 0.14, w) * wr.a);  // širé moře tmavší
+    vec3 col = mix(wr.rgb, wr.rgb * vec3(0.78, 0.85, 0.95), smoothstep(0.04, 0.22, w) * wr.a);  // širé moře tmavší
 
-    // --- varování: blikající pruh na straně moře ---
-    float dl = uv.x * u_box.x, dt = uv.y * u_box.y, dr = (1.0 - uv.x) * u_box.x, db = (1.0 - uv.y) * u_box.y;
-    float d = 10.0;
-    if (u_edge.x > 0.5) d = dl;
-    if (u_edge.y > 0.5) d = dt;
-    if (u_edge.z > 0.5) d = dr;
-    if (u_edge.w > 0.5) d = db;
-    float band = 1.0 - smoothstep(0.03, 0.12, d);
-    c = mix(c, vec3(1.0, 0.05, 0.02), u_flash * band * 0.85);
+    // klidné moře: dlouhé vlny (vzdouvání) běží k pobřeží
+    float swell = sin(d * 42.0 - u_time * 1.6 + tsu_noise(vec2(along * 6.0, 1.0)) * 3.0);
+    col += vec3(0.05, 0.10, 0.12) * smoothstep(0.4, 1.0, swell) * smoothstep(0.01, 0.04, w) * (1.0 - u_show_flood);
+
+    // vlna: vzdutá voda je tyrkysová a prosvětlená, její svah stíněný, hřeben bílý
+    vec2 e2 = 1.0 / vec2(textureSize(u_vel, 0));
+    float ex = texture(u_vel, uv + vec2(e2.x, 0.0)).b - texture(u_vel, uv - vec2(e2.x, 0.0)).b;
+    float ey = texture(u_vel, uv + vec2(0.0, e2.y)).b - texture(u_vel, uv - vec2(0.0, e2.y)).b;
+    vec2 sg = vec2(ex / (2.0 * e2.x * u_box.x), ey / (2.0 * e2.y * u_box.y));
+    vec3 nrm = normalize(vec3(-sg * 5.0, 1.0));
+    float lit = clamp(dot(nrm, normalize(vec3(-1.0, -1.2, 1.6))), 0.0, 1.0);
+    sg *= smoothstep(0.03, 0.07, d);  // u okraje bedny simulace vlnu „vhání“ – tam nestínovat
+    float body = smoothstep(0.004, 0.05, eta) * wr.a;
+    col = mix(col, vec3(0.05, 0.66, 0.78), body * 0.6);
+    col *= mix(1.0, 0.62 + 0.6 * lit, smoothstep(0.002, 0.02, eta) * wr.a);
+    float crest = clamp(front * 1.8, 0.0, 1.0) * smoothstep(0.03, 0.06, d);  // ne na okraji bedny
+    float lace = smoothstep(0.42, 0.75, crest * (0.1 + 1.05 * n));
+    vec3 white = mix(vec3(0.55, 0.85, 0.95), vec3(0.97, 1.0, 1.0), smoothstep(0.45, 0.8, n));  // chuchvalce pěny
+    col = mix(col, white, lace * wr.a);
+
+    // varování: na obzoru roste vlna – tmavé údolí a bílý hřeben, který se zvedá
+    if (u_warn > 0.0) {
+        float r0 = 0.03 + 0.05 * u_warn;
+        float sea = smoothstep(0.0005, 0.003, w);
+        float ridge = exp(-pow((d - r0) / 0.022, 2.0));
+        float trough = exp(-pow((d - r0 - 0.05) / 0.035, 2.0));
+        float wob = tsu_noise2(vec2(along * 9.0, u_time * 0.8));
+        col = mix(col, col * vec3(0.35, 0.5, 0.6), trough * u_warn * 0.7 * sea);
+        col = mix(col, vec3(0.08, 0.70, 0.80), ridge * u_warn * sea * 0.8);
+        col = mix(col, vec3(0.97, 1.0, 1.0), smoothstep(0.45, 0.9, ridge * (0.6 + 0.6 * wob)) * u_warn * sea);
+    }
+    c = col;
+
+    // poplach: pás u moře s šipkami (chevrony) mířícími na pevninu + rudé okraje, plynulý pulz
+    float band = 1.0 - smoothstep(0.05, 0.13, d);
+    float chev = step(0.0, u_warn - 0.001) * step(0.5, fract((d + abs(fract(along * 3.5) - 0.5) * 0.18) * 7.0 - u_time * 0.9));
+    vec3 alarm = mix(vec3(1.0, 0.06, 0.02), vec3(1.0, 0.78, 0.10), chev);
+    float frame = 1.0 - smoothstep(0.0, 0.07, min(min(pm.x, u_box.x - pm.x), min(pm.y, u_box.y - pm.y)));
+    c = mix(c, alarm, u_flash * band * 0.65);
+    c = mix(c, vec3(1.0, 0.05, 0.02), u_flash * frame * 0.6);
     f_color = vec4(c, 1.0);
 }
 """
@@ -194,6 +250,19 @@ def place_towns(terrain: np.ndarray, sea: float, edge: int, rng: np.random.Gener
     return towns
 
 
+def soft_discs(centers: np.ndarray, radii: np.ndarray, colors: np.ndarray, segments: int = 10):
+    """Mnoho měkkých kruhů (plný střed, průhledný okraj) -> (vrcholy, barvy) pro Painter.triangles."""
+    n = len(centers)
+    ang = np.linspace(0, 2 * math.pi, segments + 1)
+    ring = np.stack([np.cos(ang), np.sin(ang)], axis=1)
+    pts = centers[:, None, :] + radii[:, None, None] * ring[None]
+    c = np.repeat(centers[:, None, :], segments, axis=1)
+    tris = np.stack([c, pts[:, :-1], pts[:, 1:]], axis=2).reshape(-1, 2)
+    cols = np.repeat(colors, segments * 3, axis=0).reshape(n, segments, 3, 4).copy()
+    cols[:, :, 1:, 3] *= 0.2
+    return tris, cols.reshape(-1, 4)
+
+
 class TsunamiGame(Game):
     id = "tsunami"
     title = "Mega tsunami"
@@ -229,6 +298,8 @@ class TsunamiGame(Game):
         self.last_result: tuple[float, int, int] | None = None
         self._refresh_t = 0.0
         self._planned = False
+        self.spray = np.zeros((0, 6), np.float32)  # tříšť: x, y, vx, vy, věk, život [m, m/s, s]
+        self.front = None
         self._set_phase(CALM, FIRST_CALM + self.host.settings.attract.intro_seconds)  # po úvodním slajdu
 
     def stop(self) -> None:
@@ -309,7 +380,7 @@ class TsunamiGame(Game):
                 if tex is not None:
                     tex.release()
             self.tex = self.host.ctx.texture((shape[1], shape[0]), 4, dtype="f4")
-            self.vel_tex = self.host.ctx.texture((shape[1], shape[0]), 2, dtype="f4")
+            self.vel_tex = self.host.ctx.texture((shape[1], shape[0]), 4, dtype="f4")
             for tex in (self.tex, self.vel_tex):
                 tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
                 tex.repeat_x = tex.repeat_y = False
@@ -360,13 +431,15 @@ class TsunamiGame(Game):
         # pěna: rychlá a mělká voda + čelo vlny (hloubka rychle roste)
         v = velocity(sim)
         rise = np.clip(((sim.depth - prev) / max(dt, 1e-3) - 0.02) / 0.06, 0, 1)
-        shallow = np.clip(1.0 - sim.depth / 0.035, 0.0, 1.0)
-        new_foam = np.clip((v - 0.08) / 0.25, 0, 1) * shallow
+        rise *= self.seafill <= 0  # čelo vlny = voda se valí na pevninu (ne celé vzdouvající se moře)
+        shallow = np.clip(1.0 - sim.depth / 0.02, 0.0, 1.0)
+        new_foam = np.clip((v - 0.18) / 0.3, 0, 1) * shallow
         # příboj: pruh vody u souše (na čele vlny silnější)
         wet = (sim.depth > 0.0015).astype(np.uint8)
         shore = (cv2.dilate(1 - wet, np.ones((3, 3), np.uint8)) > 0) & (wet > 0)
         surf = shore * np.clip(v / 0.2, 0.5, 1.0)
         new_foam = blur3(blur3(np.maximum(np.maximum(new_foam, rise), surf) * (sim.depth > 0.001)))
+        self.front = blur3(blur3(rise))
         np.maximum(new_foam, self.foam * math.exp(-dt / 0.6), out=self.foam)
         self.foam *= sim.depth > 0.0008
 
@@ -383,15 +456,48 @@ class TsunamiGame(Game):
         assert self.tex is not None
         self.tex.write(np.dstack([sim.depth, self.foam, self.wet, self.flood]).astype(np.float32).tobytes())
         vx, vy = sim.velocity(max_speed=1.0)
-        self.vel_tex.write(np.dstack([blur3(vx), blur3(vy)]).astype(np.float32).tobytes())
+        # vzdutí hladiny nad moře (stínování vlny) a čelo vlny (bílý hřeben)
+        # (na moři hladina nad klidným mořem, na pevnině hloubka valící se vody)
+        eta = np.where(self.seafill > 0, terrain + sim.depth - self.sea, sim.depth)
+        eta = np.where(sim.depth > 0.0015, np.clip(eta, 0.0, 0.15), 0.0)
+        self.vel_tex.write(np.dstack([blur3(vx), blur3(vy), blur3(blur3(eta.astype(np.float32))),
+                                      self.front]).astype(np.float32).tobytes())
+        self._update_spray(dt, rise, vx, vy)
+
+    def _update_spray(self, dt: float, rise: np.ndarray, vx: np.ndarray, vy: np.ndarray) -> None:
+        """Tříšť z čela vlny: bílé kapky vylétají po směru proudu a mizí."""
+        sp = self.spray
+        if len(sp):
+            sp[:, 0:2] += sp[:, 2:4] * dt
+            sp[:, 2:4] *= max(0.0, 1.0 - 1.2 * dt)
+            sp[:, 4] += dt
+            sp = sp[sp[:, 4] < sp[:, 5]]
+        if self.phase == WAVE and self.sim is not None:
+            cells = np.flatnonzero(rise.ravel() > 0.7)
+            n = min(len(cells), int(self.rng.poisson(90 * dt)))
+            if n:
+                pick = self.rng.choice(cells, n)
+                gw = rise.shape[1]
+                iy, ix = np.divmod(pick, gw)
+                cell = self.sim.cell
+                new = np.zeros((n, 6), np.float32)
+                new[:, 0] = (ix + self.rng.random(n)) * cell
+                new[:, 1] = (iy + self.rng.random(n)) * cell
+                new[:, 2] = vx.ravel()[pick] * 1.3 + self.rng.normal(0, 0.06, n)
+                new[:, 3] = vy.ravel()[pick] * 1.3 + self.rng.normal(0, 0.06, n)
+                new[:, 5] = self.rng.uniform(0.5, 1.2, n)
+                sp = np.vstack([sp, new])
+        self.spray = sp[-250:]
 
     # --- kreslení --------------------------------------------------------------------
     def render(self) -> None:
         if self.tex is None:
             return
         flash = 0.0
-        if self.phase == WARN:
-            flash = 0.5 + 0.5 * math.cos(self.phase_t * 2 * math.pi * 2)
+        warn = 0.0
+        if self.phase == WARN:  # poplach: plynulý pulz 1 Hz (žádné prudké blikání)
+            flash = 0.6 + 0.4 * math.cos(self.phase_t * 2 * math.pi)
+            warn = min(1.0, self.phase_t / self.phase_len * 1.2)
         elif self.phase == CALM and self.phase_len - self.phase_t < 5 and self.auto:
             flash = 0.25 * (0.5 + 0.5 * math.cos(self.phase_t * 2 * math.pi))
         show_flood = 0.0
@@ -401,7 +507,8 @@ class TsunamiGame(Game):
             show_flood = max(0.0, (self.phase_t - self.phase_len + 3) / 3)
         edge = tuple(1.0 if i == self.edge else 0.0 for i in range(4))
         self.host.draw_fullscreen(self.prog, u_state=(self.tex, 1), u_vel=(self.vel_tex, 2), u_sea=float(self.sea), u_flash=float(flash),
-                                  u_edge=edge, u_show_flood=float(show_flood))
+                                  u_edge=edge, u_show_flood=float(show_flood), u_warn=float(warn))
+        self._draw_spray()
         self._draw_towns()
         self._draw_sea_label()
         self._labels()
@@ -412,29 +519,73 @@ class TsunamiGame(Game):
         cw, ch = self.host.canvas_size
         return (ix + 0.5) / gw * cw, (iy + 0.5) / gh * ch
 
+    def _draw_spray(self) -> None:
+        sp = self.spray
+        if not len(sp):
+            return
+        cw, ch = self.host.canvas_size
+        bw, bh = self.host.box_size
+        k = np.clip(sp[:, 4] / sp[:, 5], 0, 1)
+        centers = sp[:, :2] * np.array([cw / bw, ch / bh], np.float32)
+        r = (0.006 + 0.012 * np.sqrt(k)) * cw / bw
+        cols = np.zeros((len(sp), 4), np.float32)
+        cols[:, :3] = (0.95, 0.99, 1.0)
+        cols[:, 3] = 0.7 * (1 - k) ** 1.5
+        verts, colors = soft_discs(centers, r, cols)
+        self.host.painter.triangles(verts, colors)
+
     def _draw_towns(self) -> None:
+        """Města: tři domky; vlna je zatopí (modře prosvítají pod vodou, kolem kruhy vln),
+        po vlně zatopená = šedé trosky s rudým křížkem, zachráněná = zelený kruh."""
         p = self.host.painter
         cw, ch = self.host.canvas_size
-        s = cw / self.host.box_size[0] * 0.016  # domek 1,6 cm
-        for (ty, tx), flooded in zip(self.towns, self.town_flooded):
+        t = self.host.time
+        s = cw / self.host.box_size[0] * 0.018  # domek 1,8 cm
+        for i, ((ty, tx), flooded) in enumerate(zip(self.towns, self.town_flooded)):
             x, y = self._cell_to_canvas(ty, tx)
-            wave_over = self.phase in (RECEDE, RESULT) or (self.phase == WAVE and flooded)
-            if flooded and wave_over:
-                body, roof = (0.35, 0.35, 0.38, 1), (0.25, 0.25, 0.28, 1)
+            under = self.phase == WAVE and flooded
+            ruined = flooded and self.phase in (RECEDE, RESULT)
+            if self.phase == RESULT and not flooded:  # zachráněné město září
+                pulse = 0.5 + 0.5 * math.sin(t * 3.0 + i)
+                p.circle(x, y, s * (2.4 + 0.3 * pulse), (0.2, 1.0, 0.35, 0.25 + 0.15 * pulse))
+            p.circle(x, y, s * 1.95, (0, 0, 0, 0.45))
+            if ruined:
+                body, roof = (0.45, 0.45, 0.48, 1), (0.28, 0.27, 0.30, 1)
+            elif under:
+                body, roof = (0.45, 0.75, 0.95, 0.75), (0.25, 0.45, 0.85, 0.75)
             else:
                 body, roof = (1.0, 0.97, 0.88, 1), (0.95, 0.15, 0.08, 1)
-            p.circle(x, y, s * 1.9, (0, 0, 0, 0.45))
-            for dx, dy in ((-0.75, -0.45), (0.75, -0.45), (0.0, 0.65)):
+            tris, cols = [], []
+            for j, (dx, dy) in enumerate(((-0.75, -0.45), (0.75, -0.45), (0.0, 0.65))):
                 hx, hy = x + dx * s, y + dy * s
-                p.rect(hx - s * 0.5, hy - s * 0.5, s, s, body)
-                p.triangles(np.array([[hx - s * 0.6, hy - s * 0.45], [hx + s * 0.6, hy - s * 0.45], [hx, hy - s * 1.0]]),
-                            roof)
-            if flooded and wave_over:
+                if ruined:  # trosky: nakřivo a níž
+                    hy += s * 0.15
+                    hx += s * 0.12 * (j - 1)
+                q = s * 0.5
+                tris += [[hx - q, hy - q], [hx + q, hy - q], [hx + q, hy + q], [hx - q, hy - q], [hx + q, hy + q],
+                         [hx - q, hy + q]]
+                cols += [body] * 6
+                if not ruined:
+                    tris += [[hx - s * 0.62, hy - s * 0.45], [hx + s * 0.62, hy - s * 0.45], [hx, hy - s * 1.05]]
+                    cols += [roof] * 3
+                else:
+                    tris += [[hx - s * 0.6, hy - s * 0.2], [hx + s * 0.1, hy - s * 0.75], [hx + s * 0.55, hy - s * 0.3]]
+                    cols += [roof] * 3
+            p.triangles(np.array(tris, np.float32), np.array(cols, np.float32))
+            if under:  # kruhy na hladině nad zatopeným městem
+                for ph in ((t * 0.9) % 1.0, (t * 0.9 + 0.5) % 1.0):
+                    p.circle(x, y, s * (1.6 + 2.2 * ph), (0.9, 0.97, 1.0, 0.8 * (1 - ph)), width=s * 0.22)
+            if ruined:
                 r = s * 1.7
-                p.polyline([(x - r, y - r), (x + r, y + r)], (1, 0.1, 0.05, 1), width=s * 0.35)
-                p.polyline([(x + r, y - r), (x - r, y + r)], (1, 0.1, 0.05, 1), width=s * 0.35)
+                pulse = 0.75 + 0.25 * math.sin(t * 2.5 + i)
+                p.circle(x, y, s * 2.15, (1, 0.12, 0.08, pulse), width=s * 0.3)
+                p.polyline([(x - r, y - r), (x + r, y + r)], (1, 0.1, 0.05, 1), width=s * 0.38)
+                p.polyline([(x + r, y - r), (x - r, y + r)], (1, 0.1, 0.05, 1), width=s * 0.38)
             elif self.phase == RESULT:
-                p.circle(x, y, s * 2.1, (0.2, 1.0, 0.3, 1), width=s * 0.3)
+                p.circle(x, y, s * 2.15, (0.2, 1.0, 0.35, 1), width=s * 0.3)
+                # fajfka
+                p.polyline([(x - s * 0.9, y + s * 0.1), (x - s * 0.25, y + s * 0.8), (x + s * 1.0, y - s * 0.8)],
+                           (0.25, 1.0, 0.4, 1), width=s * 0.35)
 
     def _draw_sea_label(self) -> None:
         if self.phase not in (CALM, WARN):
@@ -442,9 +593,10 @@ class TsunamiGame(Game):
         p = self.host.painter
         cw, ch = self.host.canvas_size
         size = max(16, ch // 26)
-        col = (0.6, 0.9, 1.0, 1) if self.phase == CALM else (1, 0.3, 0.2, 1)
-        # šipky od moře dovnitř
+        col = (0.6, 0.9, 1.0, 1) if self.phase == CALM else (1, 0.85, 0.2, 1)
+        # šipky od moře dovnitř; při varování se opakovaně posouvají na pevninu
         n = 3
+        shift = ((self.phase_t * 1.2) % 1.0) * size * 2.5 if self.phase == WARN else 0.0
         for i in range(n):
             f = (i + 1) / (n + 1)
             if self.edge == 0:
@@ -455,6 +607,7 @@ class TsunamiGame(Game):
                 a, d = (f * cw, size * 0.8), (0, 1)
             else:
                 a, d = (f * cw, ch - size * 0.8), (0, -1)
+            a = (a[0] + d[0] * shift, a[1] + d[1] * shift)
             self._arrow(a, d, size * 2.2, col)
         if self.edge in (1, 3):
             y = size * 0.3 if self.edge == 1 else ch - size * 1.4
@@ -498,8 +651,8 @@ class TsunamiGame(Game):
             n = max(1, math.ceil(remaining))
             text = f"TSUNAMI za {n}…"
             big = hud.fit("TSUNAMI za 8…", ch / 7, cw * 0.62)  # stejná velikost pro všechna čísla
-            on = (self.phase_t % 0.5) < 0.32
-            col = (1, 0.2, 0.1, 1) if on else (1, 0.9, 0.2, 1)
+            u = 0.5 + 0.5 * math.cos(self.phase_t * 2 * math.pi)  # plynule rudá <-> žlutá, 1 Hz
+            col = (1, 0.2 + 0.7 * u, 0.1 + 0.1 * u, 1)
             sign = big * 1.1
             w = get_font(big, True).getlength(text)
             x0 = (cw - (sign + big * 0.3 + w)) / 2  # značka + mezera + text, celé na střed
@@ -514,7 +667,10 @@ class TsunamiGame(Game):
         elif self.phase == RESULT and self.last_result is not None:
             pct, saved, total = self.last_result
             cy = size * 1.85  # nahoře, kam se města nestaví
-            p.rect(cw * 0.12, cy - size * 1.75, cw * 0.76, size * 3.4, (0, 0, 0, 0.6))
+            p.rect(cw * 0.12, cy - size * 1.75, cw * 0.76, size * 3.4, (0.0, 0.03, 0.08, 0.72))
+            good_all = bool(total) and saved == total
+            edge_col = (0.25, 1.0, 0.4, 1) if good_all else (1.0, 0.25, 0.15, 1)
+            p.rect_outline(cw * 0.12, cy - size * 1.75, cw * 0.76, size * 3.4, edge_col, width=max(3.0, size * 0.12))
             p.text(f"Vlna zaplavila {pct:.0f} % pevniny", cw / 2, cy - size * 0.7, size=int(size * 1.3),
                    anchor="mc", bold=True, color=(1, 0.4, 0.3, 1), outline=5)
             if total:
@@ -522,6 +678,11 @@ class TsunamiGame(Game):
                 txt = "Všechna města přežila!" if good else f"Zachráněná města: {saved} z {total}"
                 p.text(txt, cw / 2, cy + size * 0.8, size=size, anchor="mc", bold=True,
                        color=(0.3, 1, 0.4, 1) if saved else (1, 1, 1, 1), outline=5)
+            items = [((1.0, 0.22, 0.12, 1), "zatopená pevnina")]
+            if total:
+                items += [((0.25, 1.0, 0.4, 1), "zachráněné město")] if saved else []
+                items += [((1.0, 0.1, 0.05, 1), "zatopené město")] if saved < total else []
+            hud.legend(p, items, cw / 2, bottom_y, small, anchor="bc")
 
     # --- ovládání ------------------------------------------------------------------
     def key(self, name: str, shift: bool = False) -> bool:
