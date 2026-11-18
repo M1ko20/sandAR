@@ -115,6 +115,7 @@ class ChallengeGame(Game):
         self._last_render: float | None = None
         self.result: Score | None = None
         self.best = 0.0
+        self._tada_done = False
         self.reveal_until = 0.0
         self.success_since: float | None = None
         self._next_eval = 0.0
@@ -154,6 +155,7 @@ class ChallengeGame(Game):
         self.center = fx.mask_center(mask)
         self.result = None
         self.best = 0.0
+        self._tada_done = False
         self.success_since = None
         self.started = time.monotonic()
 
@@ -179,6 +181,9 @@ class ChallengeGame(Game):
                 self.success_since = now
         else:
             self.success_since = None
+        if self.success_since is not None and self._show_score() and not self._tada_done:
+            self._tada_done = True  # jednou za předlohu (ne při kolísání kolem hranice)
+            self.sfx.play("tada", 1.0)
 
     def _show_score(self) -> bool:
         return self.mode == 0 or time.monotonic() < self.reveal_until

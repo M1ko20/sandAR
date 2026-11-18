@@ -101,7 +101,7 @@ class IslandFloodGame(Game):
         self.sunk = [False, False]
         self.winner: int | None = None
         self._zones: dict = {}
-        self.arena = vs.Arena()
+        self.arena = vs.Arena(self)
         self.sink_fx: list[tuple[float, float, float]] = []  # (x, y [px], čas) – ostrov zmizel pod vodou
 
     # --- logika ------------------------------------------------------------------------------
@@ -125,6 +125,9 @@ class IslandFloodGame(Game):
         self.peaks = [vs.zone_peak(hm.heights, hm.hands, z) for z in zones]
         self.arena.update(dt, self.host.canvas_size)
         self.arena.phase(self.state, shock=self.state == RISE)
+        if self.state == BUILD:
+            self.arena.countdown(self.BUILD_TIME - self.state_t)
+        self._sound()
 
         if self.state == READY:
             if self.hand_time >= self.HANDS_TO_START:
@@ -141,6 +144,9 @@ class IslandFloodGame(Game):
                 self.below[p] = self.below[p] + dt if self.area[p] < self.MIN_AREA else 0.0
                 was = self.sunk[p]
                 self.sunk[p] = self.below[p] >= self.SINK_HOLD
+                if self.sunk[p] and not was:
+                    x = (self.peaks[p][1] + 0.5) / hm.shape[1] if self.peaks[p] is not None else 0.25 + 0.5 * p
+                    self.sfx.play("bubble", 1.0, x=x)
                 if self.sunk[p] and not was and self.peaks[p] is not None:
                     iy, ix, _ = self.peaks[p]
                     cw, ch = self.host.canvas_size
@@ -151,6 +157,21 @@ class IslandFloodGame(Game):
             self.state, self.state_t = READY, 0.0
             self.hand_time = 0.0
             self.arena.clear_win()
+
+    def _sound(self) -> None:
+        """Příboj (``sea``) sílí se stoupající hladinou; když je ostrov těsně nad vodou, tichý tep
+        napětí (``tension``)."""
+        if self.state == RISE:
+            k = float(np.clip(self.state_t / 45.0, 0, 1))
+            self.sfx.loop("sea", 0.3 + 0.55 * k)
+            danger = 0.0
+            for pl in (0, 1):
+                pk = self.peaks[pl]
+                if not self.sunk[pl] and pk is not None and (pk[2] - self.sea < 0.01 or self.below[pl] > 0):
+                    danger = 0.5
+            self.sfx.loop("tension", danger)
+        elif self.state == RESULT:
+            self.sfx.loop("sea", 0.25)
 
     def start_build(self) -> None:
         self.state, self.state_t = BUILD, 0.0

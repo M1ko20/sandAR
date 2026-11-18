@@ -88,7 +88,8 @@ class WaterWarGame(Game):
         self.score = [0, 0]
         self._new_round_pending = True
         self.phase, self.phase_t = PREP, 0.0
-        self.arena = vs.Arena()
+        self.arena = vs.Arena(self)
+        self._splash_t = -99.0
 
     def stop(self) -> None:
         self.prog.release()
@@ -135,20 +136,43 @@ class WaterWarGame(Game):
         elif self.phase == FLOOD:
             eco.add_source(sim.depth, hm.size, self.spring(hm.size), self.SPRING_R,
                            self.flow(hm.size, self.phase_t) * dt)
+            splash: list[float] = []
             for village in self.villages:
                 wet = eco.flooded_houses(sim.depth, village, hm.size, self.FLOOD_DEPTH)
                 for h, w in zip(village, wet):
                     if w and not h.flooded:
                         h.flooded, h.flooded_at = True, self.clock
+                        splash.append(h.x / hm.size[0])
+            if splash and self.clock - self._splash_t > 0.4:  # zatopený domek, z jeho místa (bez kulometu)
+                self._splash_t = self.clock
+                self.sfx.play("splash", min(1.0, 0.8 + 0.1 * len(splash)), x=splash[0],
+                              pitch=float(self.rng.uniform(0.9, 1.1)))
             self._check_end()
         elif self.phase == RESULT and self.phase_t >= self.RESULT_TIME:
             self._new_round(hm)
         self.arena.update(dt, self.host.canvas_size)
         self.arena.phase(self.phase, shock=self.phase == FLOOD)
+        if self.phase == PREP:
+            self.arena.countdown(self.PREP_TIME - self.phase_t)
+        self._sound(hm)
         sim.advance(hm.heights, dt, 9.81)
         eco.soak(sim.depth, (self.INFILTRATION if self.phase == FLOOD else 0.0006) * dt)
         assert self.tex is not None
         self.tex.write(sim)
+
+    def _sound(self, hm) -> None:
+        """Pramen zurčí (``stream``) od otevření, se sílícím průtokem a množstvím vody přibývá
+        hukot (``roar``). Po povodni voda dozní, jak se vsakuje."""
+        assert self.sim is not None
+        litres = self.sim.volume * 1000
+        area = hm.size[0] * hm.size[1]
+        fill = float(np.clip(litres / (6.0 * area), 0, 1))  # ~6 l/m² = půlka bedny pod vodou
+        if self.phase == FLOOD:
+            surge = min(1.0, self.phase_t / (2 * self.RAMP))
+            self.sfx.loop("stream", 0.35 + 0.3 * surge, x=0.5)
+            self.sfx.loop("roar", 0.6 * max(surge - 0.25, 0.0) / 0.75 + 0.25 * fill)
+        elif self.phase == RESULT:
+            self.sfx.loop("stream", 0.35 * fill, x=0.5)
 
     def _start_flood(self) -> None:
         self.phase, self.phase_t = FLOOD, 0.0

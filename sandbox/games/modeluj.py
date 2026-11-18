@@ -125,7 +125,7 @@ class ModelRaceGame(Game):
         self.mask_tex = None
         self.halo_tex = None
         self.centers = (0.5, 0.5, 0.5, 0.5)
-        self.arena = vs.Arena()
+        self.arena = vs.Arena(self)
         self.confetti = vs.Confetti()
         self._offs = [fx.Smooth(5.0), fx.Smooth(5.0)]
         self._shown = [fx.Smooth(5.0), fx.Smooth(5.0)]
@@ -146,6 +146,7 @@ class ModelRaceGame(Game):
         self.hand_time = 0.0
         self.scores: list[Score | None] = [None, None]
         self.good_since: list[float | None] = [None, None]
+        self._chime_t = [-99.0, -99.0]
         self.winner: int | None = None
         self.finish_time = 0.0
         self._next_eval = 0.0
@@ -217,6 +218,8 @@ class ModelRaceGame(Game):
         self.state_t += dt
         self.arena.update(dt, self.host.canvas_size)
         self.arena.phase(self.state, shock=self.state == ROUND and self.players == 2)
+        if self.state == ROUND and self.players == 2:
+            self.arena.countdown(self.DUEL_LIMIT - self.state_t)
         self.confetti.update(dt)
         hands = hm.has_hands
         self.hand_time = self.hand_time + dt if hands else 0.0
@@ -232,6 +235,10 @@ class ModelRaceGame(Game):
                 if s is not None and s.score >= self.success:
                     if self.good_since[p] is None:
                         self.good_since[p] = self.state_t
+                        if self.t - self._chime_t[p] > 3.0:  # shoda dosažena – vydrž! (ne při kolísání)
+                            self._chime_t[p] = self.t
+                            x = (0.25 + 0.5 * p) if self.players == 2 else None
+                            self.sfx.play("chime", 0.7, x=x)
                 else:
                     self.good_since[p] = None
             done = [p for p in range(self.players)
@@ -261,6 +268,8 @@ class ModelRaceGame(Game):
         if self.players == 2:
             self.arena.win(winner, canvas)
         else:  # jeden hráč: konfety z hlavní části předlohy
+            if winner is not None:
+                self.sfx.play("tada", 1.0)
             self.confetti.burst(self.centers[0] * canvas[0], self.centers[1] * canvas[1], 220, fx.CONFETTI,
                                 canvas[1] * 1.2)
 

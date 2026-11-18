@@ -64,7 +64,7 @@ class KingOfHillGame(Game):
         self.leader: int | None = None
         self.winner: int | None = None
         self._zones: dict = {}
-        self.arena = vs.Arena()
+        self.arena = vs.Arena(self)
         self.lead_flash: tuple[int, float] | None = None  # (nový král, čas) – záblesk při převzetí koruny
 
     # --- logika ------------------------------------------------------------------------------
@@ -92,9 +92,16 @@ class KingOfHillGame(Game):
         else:
             self.leader = 0 if a[2] > b[2] else 1
         if self.leader is not None and self.leader != prev_leader and self.state == ROUND:
+            # nový král: „ding“ z místa jeho vrcholu (nejvýš jednou za sekundu – při kolísání vrcholů)
+            if self.lead_flash is None or self.t - self.lead_flash[1] > 1.0:
+                pk = self.peaks[self.leader]
+                x = (pk[1] + 0.5) / hm.shape[1] if pk is not None else None
+                self.sfx.play("ding", 0.8, x=x, pitch=1.0 if self.leader == 0 else 1.12)
             self.lead_flash = (self.leader, self.t)
         self.arena.update(dt, self.host.canvas_size)
         self.arena.phase(self.state, shock=self.state == ROUND)
+        if self.state == ROUND:
+            self.arena.countdown(self.ROUND_TIME - self.state_t)
 
         if self.state == READY:
             if self.hand_time >= self.HANDS_TO_START:

@@ -8,6 +8,7 @@ přečetl z místa, kde stojí.
 
 from __future__ import annotations
 
+import math
 from typing import Sequence
 
 import cv2
@@ -221,9 +222,15 @@ class Arena:
 
     Mód volá ``phase(name)`` při změně fáze (spustí vlnu), ``win(player|None)`` na konci kola,
     ``update(dt)`` každý snímek a v ``render`` předá ``uniforms()`` do svého shaderu.
+
+    Zvuky arény (stejné ve všech hrách pro dva): start kola ``whistle``, odpočet posledních 5 s
+    ``beep`` (v poslední vteřině ``go``) přes ``countdown(left)``, výhra ``fanfare`` ze strany
+    vítěze, remíza ``gong``. ``owner`` = mód (jeho ``sfx``); bez něj je aréna tichá.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, owner=None) -> None:
+        self.owner = owner
+        self._cd_prev: float | None = None
         self.t = 0.0
         self.shock = -1.0
         self.shock_x: float | None = None
@@ -238,12 +245,33 @@ class Arena:
         if name == self._phase:
             return
         self._phase = name
+        self._cd_prev = None
         if shock:
             self.shock, self.shock_x = 0.0, x
+            self._play("whistle", 0.9)
+
+    def _play(self, name: str, gain: float = 1.0, x: float | None = None, pitch: float = 1.0) -> None:
+        sfx = getattr(self.owner, "sfx", None)
+        if sfx is not None:
+            sfx.play(name, gain=gain, x=x, pitch=pitch)
+
+    def countdown(self, left: float, last: int = 5) -> None:
+        """Volat každý snímek se zbývajícím časem [s] do události: ``beep`` při každé celé sekundě
+        v posledních ``last`` s, v poslední vteřině ``go``. Každý zvuk zazní jen jednou."""
+        prev, self._cd_prev = self._cd_prev, left
+        if prev is None or left <= 0:
+            return
+        a, b = math.ceil(prev), math.ceil(left)
+        if a != b and 1 <= b <= last:
+            self._play("go" if b == 1 else "beep", 0.8)
 
     def win(self, player: int | None, canvas: tuple[int, int] | None = None) -> None:
         """Konec kola: ``player`` = vítěz (None = remíza). Vybuchnou konfety v barvě vítěze."""
         self.winner, self.win_t = player, 0.0
+        if player is None:
+            self._play("gong", 0.9)
+        else:
+            self._play("fanfare", 1.0, x=0.2 if player == 0 else 0.8)
         if canvas is not None:
             self.burst(canvas, player)
 
