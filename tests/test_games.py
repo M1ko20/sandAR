@@ -109,3 +109,23 @@ def test_treasure_is_found_when_dug_to_the_bottom():
     assert update_reveals([tr], heights, (1.0, 0.6), 1.0, 0.0) == []
     found = update_reveals([tr], heights, (1.0, 0.6), 1.0, 0.0, bottom=-0.02)
     assert found == [tr]
+
+
+def test_audio_mixer_loops_fade_and_one_shots_end():
+    """Mixer: smyčka sleduje hlasitost a po přestání volání dozní, jednorázový zvuk skončí."""
+    from sandbox.audio import Mixer
+
+    m = Mixer()
+    m.master, m._g = 1.0, 1.0
+    tone = (0.5 * np.sin(np.arange(48000) / 48000 * 2 * np.pi * 440)).astype(np.float32)
+    m.play(tone[:4800], 1.0, 0.0)
+    for _ in range(30):
+        m.loop("t", tone, 0.5, -0.5)
+        out = m.render(1024)
+    assert np.abs(out).max() > 0.1
+    assert np.sqrt((out[:, 0] ** 2).mean()) > np.sqrt((out[:, 1] ** 2).mean())  # panorama vlevo
+    assert m.active == 1  # jednorázový zvuk dohrál, zbývá smyčka
+    m._loops["t"].last = 0.0  # mód ji přestal volat
+    for _ in range(40):
+        out = m.render(1024)
+    assert m.active == 0 and np.abs(out).max() < 1e-3

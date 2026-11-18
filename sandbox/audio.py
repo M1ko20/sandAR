@@ -274,7 +274,12 @@ class Audio(NullAudio):
             if (self._proc is None or self._proc.poll() is not None) and not self._start_proc():
                 self._stop.wait(5.0)
                 continue
-            block = self.mixer.render(BLOCK)
+            try:
+                block = self.mixer.render(BLOCK)
+            except Exception:  # chyba v míchání nesmí zvuk umlčet natrvalo
+                log.exception("Chyba při míchání zvuku – zahazuji rozehrané zvuky")
+                self.mixer.stop_all()
+                block = np.zeros((BLOCK, 2), np.float32)
             pcm = (np.clip(block, -1, 1) * 32767).astype("<i2").tobytes()
             try:
                 self._proc.stdin.write(pcm)  # type: ignore[union-attr]

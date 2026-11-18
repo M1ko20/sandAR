@@ -182,6 +182,11 @@ V simulaci prostřední tlačítko myši vytvoří virtuální ruku. Parametry: 
 
 ## Provoz na akci
 
+* **Zvuk**: každý mód má zvuky (déšť, hrom, láva, vlny, odpočty, fanfáry…), všechny syntetizované
+  v `sandbox/sounds.py`, přehrávané přes PipeWire/PulseAudio/ALSA (`pw-cat`, `pacat`, `aplay` – bez
+  dalších knihoven). F9 ztlumit, F10/F11 hlasitost, v attract mode je zvuk ztlumený. Poslech všech zvuků:
+  `python -m sandbox zvuky` (`--game thunder` jeden, `--out složka` uložit WAV). Nastavení v sekci `audio`.
+
 * **Úvodní slajd**: po přepnutí módu se na písek na 5 s promítne název a věta „jak hrát“.
 * **Attract mode**: když se 90 s nikdo nedotkne písku (žádné ruce, žádná změna terénu),
   módy se samy střídají po 45 s a každý začíná s čistým světem. Ruka nad pískem střídání zastaví.

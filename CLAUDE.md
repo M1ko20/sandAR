@@ -34,6 +34,9 @@ HeightMap ─► games/<mód>.py ─► plátno (pohled shora) ─► projector/
 * `sandbox/autocal.py` – automatická kalibrace a kontrola přes barevnou kameru Kinectu
   (`build/kinect2_bridge/kinect2_snap`).
 * `sandbox/attract.py` – úvodní slajd módu, attract mode, auto-reset.
+* `sandbox/audio.py` + `sandbox/sounds.py` – zvuk: syntetizovaná banka (numpy), mixer ve vlákně, výstup
+  rourou do `pw-cat`/`pacat`/`aplay`; v módu `self.sfx.play(název, gain, x)` a `self.sfx.loop(název, hlasitost, x)`
+  (smyčku volat každý snímek, sama dozní). Bez výstupu (testy) NullAudio. F9/F10/F11, `python -m sandbox zvuky`.
 * `sandbox/ortofoto.py` – stažení ortofota a DMR 5G z bezplatných služeb ČÚZK (`python -m sandbox ortofoto`)
   do `data/ortofoto/` pro mód Skutečná krajina (offline na akci).
 * `sandbox/ui/help_overlay.py` – nápověda na písku (H), písmo se přizpůsobí, aby se vše vešlo.
@@ -70,10 +73,12 @@ zbytečné závislosti; config jsou dataclassy + JSON.
 
 ## Pravidla
 
+- Zvuk podtrhuje děj, nehraje pořád: klidné módy tiché prostředí, výrazné zvuky jen pro události,
+  odpočet beep/go jen posledních 5 s, žádné opakování zvuku každý snímek.
 - Nový mód = nový soubor v `sandbox/games/`, fyzika do `sandbox/sim/`, testy do `tests/`.
 - Texty pro návštěvníky česky (s diakritikou), čitelné ze 2 m (font ≥ výška plátna / 30), jasné barvy (tmavá místnost).
 - Mód musí reagovat na skutečný terén, mít `intro`, `reset()` a běžet s rezervou na 60 FPS (numpy vektorizovaně).
-- Klávesy, které bere jádro: Esc, Tab, 0–9 (i se Shiftem), C, H, Z, Backspace (pokud ho mód nepoužije), v simulaci F, N.
+- Klávesy, které bere jádro: Esc, Tab, 0–9 (i se Shiftem), C, H, Z, F9–F11 (zvuk), Backspace (pokud ho mód nepoužije), v simulaci F, N.
 - Ruce v módech: `hm.hand_list` (dlaň `pos`, špička `tip`, `height` nad pískem, `raised` = zvednutá
   ≥ 25 cm, `id`), přítomnost `hm.has_hands`. Efekty „ze vzduchu“ (déšť) jen pro `raised`.
   Texty přes `render/hud.py` (label, legend), velikost `hud.size(canvas, k)`.
