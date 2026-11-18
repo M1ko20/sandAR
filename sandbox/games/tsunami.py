@@ -23,6 +23,7 @@ from .base import Game
 
 FRAG = """
 uniform sampler2D u_state;   // r = hloubka vody, g = pěna, b = mokrý písek, a = zatopeno při vlně
+uniform sampler2D u_vel;     // rychlost vody [m/s] (rg)
 uniform float u_sea;         // hladina moře [m]
 uniform float u_flash;       // 0..1 červené varování
 uniform vec4 u_edge;         // strana moře (levá, horní, pravá, dolní) – jedna jednička
@@ -83,21 +84,12 @@ void main() {
     float stripe = step(0.5, fract((pm.x + pm.y) * 28.0));
     c = mix(c, mix(c, vec3(1.0, 0.15, 0.1), 0.55 + 0.25 * stripe), u_show_flood * st.a);
 
-    // --- voda ---
-    if (w > 0.0008) {
-        float a = smoothstep(0.0008, 0.004, w);
-        float d01 = clamp(w / 0.05, 0.0, 1.0);
-        vec3 wc = mix(vec3(0.10, 0.70, 1.0), vec3(0.03, 0.30, 0.85), d01);
-        wc = mix(wc, vec3(0.02, 0.10, 0.45), smoothstep(0.05, 0.14, w));
-        wc *= mix(0.8, 1.15, hillshade(uv, 2.5));
-        float rip = noise2(pm * 45.0 + u_time * vec2(0.9, 0.6)) - noise2(pm * 45.0 - u_time * vec2(0.7, 0.8));
-        wc += 0.10 * rip;
-        // pěna: rozbitá bílá textura
-        float n = noise2(pm * 90.0 + u_time * vec2(1.3, -0.9)) * 0.5 + noise2(pm * 30.0 - u_time * 0.5) * 0.5;
-        float f = smoothstep(0.3, 0.7, foam * (0.5 + 0.8 * n));
-        wc = mix(wc, vec3(0.97, 0.99, 1.0), f);
-        c = mix(c, wc, a);
-    }
+    // --- voda: sdílené vykreslení (proud unáší vlnky, mělčiny průhledné) + rozbitá pěna vlny ---
+    vec2 vel = texture(u_vel, uv).rg;
+    float n = noise2(pm * 90.0 + u_time * vec2(1.3, -0.9)) * 0.5 + noise2(pm * 30.0 - u_time * 0.5) * 0.5;
+    float f = smoothstep(0.3, 0.7, foam * (0.5 + 0.8 * n));
+    vec4 wr = water_shade(c, uv, w, vel, f);
+    c = mix(wr.rgb, wr.rgb * vec3(0.78, 0.85, 0.95), smoothstep(0.05, 0.14, w) * wr.a);  // širé moře tmavší
 
     // --- varování: blikající pruh na straně moře ---
     float dl = uv.x * u_box.x, dt = uv.y * u_box.y, dr = (1.0 - uv.x) * u_box.x, db = (1.0 - uv.y) * u_box.y;
@@ -221,6 +213,7 @@ class TsunamiGame(Game):
         self.prog = self.host.program(FRAG)
         self.sim: WaterSim | None = None
         self.tex: moderngl.Texture | None = None
+        self.vel_tex: moderngl.Texture | None = None
         self.rng = np.random.default_rng()
         self.auto = getattr(self, "auto", True)
         self.amplitude = getattr(self, "amplitude", 0.10)  # [m] výška vlny nad mořem
@@ -235,13 +228,15 @@ class TsunamiGame(Game):
         self.flooded_pct = 0.0
         self.last_result: tuple[float, int, int] | None = None
         self._refresh_t = 0.0
-        self._set_phase(CALM, FIRST_CALM)
+        self._planned = False
+        self._set_phase(CALM, FIRST_CALM + self.host.settings.attract.intro_seconds)  # po úvodním slajdu
 
     def stop(self) -> None:
         self.prog.release()
-        if self.tex is not None:
-            self.tex.release()
-            self.tex = None
+        for tex in (self.tex, self.vel_tex):
+            if tex is not None:
+                tex.release()
+        self.tex = self.vel_tex = None
 
     def reset(self) -> None:
         if self.sim is not None:
@@ -263,23 +258,33 @@ class TsunamiGame(Game):
             self._begin_wave()
         if phase == RESULT:
             self._finish_wave()
+        if phase == CALM:
+            self._planned = False  # nový cyklus -> nové pobřeží a města podle terénu
 
     # --- moře, města --------------------------------------------------------------
-    def _refresh_coast(self) -> None:
-        """Podle aktuálního terénu urči stranu moře, hladinu, moře a města."""
+    def _plan_coast(self) -> None:
+        """Jednou za cyklus (začátek klidu): strana moře, hladina a města.
+
+        Pak se až do další vlny nemění – moře ani města nepřeskakují, když lidé stavějí."""
         assert self.terrain is not None
         t = self.terrain
         self.edge = lowest_edge(t) if self.edge_fixed is None else self.edge_fixed
         self.sea = sea_level_for(t, self.edge)
-        self.seafill = sea_fill(t, self.sea, self.edge)
         rng = np.random.default_rng(self.waves * 7 + self.edge)
         self.towns = place_towns(t, self.sea, self.edge, rng)
         self.town_flooded = [False] * len(self.towns)
+        self._planned = True
+        self._refresh_coast()
+
+    def _refresh_coast(self) -> None:
+        """Moře podle aktuálního terénu (hráz u pobřeží moře zmenší) – strana a hladina zůstávají."""
+        assert self.terrain is not None
+        self.seafill = sea_fill(self.terrain, self.sea, self.edge)
 
     def _begin_wave(self) -> None:
         assert self.terrain is not None and self.sim is not None
-        if self.seafill is None:
-            self._refresh_coast()
+        if not self._planned:
+            self._plan_coast()
         self.land = (self.terrain > self.sea + 0.003) & (self.seafill <= 0)  # type: ignore[operator]
         self.flood[:] = 0
         self.town_flooded = [False] * len(self.towns)
@@ -300,11 +305,14 @@ class TsunamiGame(Game):
             self.wet = np.zeros(shape, np.float32)
             self.flood = np.zeros(shape, np.float32)
             self.land = np.zeros(shape, bool)
-            if self.tex is not None:
-                self.tex.release()
+            for tex in (self.tex, self.vel_tex):
+                if tex is not None:
+                    tex.release()
             self.tex = self.host.ctx.texture((shape[1], shape[0]), 4, dtype="f4")
-            self.tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
-            self.tex.repeat_x = self.tex.repeat_y = False
+            self.vel_tex = self.host.ctx.texture((shape[1], shape[0]), 2, dtype="f4")
+            for tex in (self.tex, self.vel_tex):
+                tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+                tex.repeat_x = tex.repeat_y = False
             self.seafill = None
         sim = self.sim
 
@@ -317,7 +325,10 @@ class TsunamiGame(Game):
 
         # v klidu sleduj, jak návštěvníci mění pobřeží (1× za sekundu)
         self._refresh_t -= dt
-        if self.seafill is None or (self.phase in (CALM, WARN) and self._refresh_t <= 0):
+        if not self._planned:
+            self._refresh_t = 1.0
+            self._plan_coast()
+        elif self.seafill is None or (self.phase in (CALM, WARN) and self._refresh_t <= 0):
             self._refresh_t = 1.0
             self._refresh_coast()
         assert self.seafill is not None
@@ -371,6 +382,8 @@ class TsunamiGame(Game):
 
         assert self.tex is not None
         self.tex.write(np.dstack([sim.depth, self.foam, self.wet, self.flood]).astype(np.float32).tobytes())
+        vx, vy = sim.velocity(max_speed=1.0)
+        self.vel_tex.write(np.dstack([blur3(vx), blur3(vy)]).astype(np.float32).tobytes())
 
     # --- kreslení --------------------------------------------------------------------
     def render(self) -> None:
@@ -387,7 +400,7 @@ class TsunamiGame(Game):
         elif self.phase == RECEDE:
             show_flood = max(0.0, (self.phase_t - self.phase_len + 3) / 3)
         edge = tuple(1.0 if i == self.edge else 0.0 for i in range(4))
-        self.host.draw_fullscreen(self.prog, u_state=(self.tex, 1), u_sea=float(self.sea), u_flash=float(flash),
+        self.host.draw_fullscreen(self.prog, u_state=(self.tex, 1), u_vel=(self.vel_tex, 2), u_sea=float(self.sea), u_flash=float(flash),
                                   u_edge=edge, u_show_flood=float(show_flood))
         self._draw_towns()
         self._draw_sea_label()
@@ -477,11 +490,10 @@ class TsunamiGame(Game):
         top_y = size * 0.5 if self.edge != 1 else ch * 0.18
         bottom_y = ch - small * 0.5 if self.edge != 3 else ch * 0.84
         if self.phase == CALM:
-            p.text("Postav hráze a ochraň města před vlnou!", cw / 2, top_y, size=size, anchor="tc", bold=True,
-                   color=(1, 1, 1, 1), outline=4)
+            hud.label(p, "Postav hráze a ochraň města před vlnou!", cw / 2, top_y, size, anchor="tc")
             if self.auto:
-                p.text(f"Tsunami přijde za {remaining:.0f} s", cw / 2, bottom_y, size=small, anchor="bc",
-                       color=(1, 0.85, 0.3, 1), outline=3)
+                hud.label(p, f"Tsunami přijde za {math.ceil(remaining + DURATION[WARN])} s", cw / 2, bottom_y,
+                          small, anchor="bc", color=hud.YELLOW)
         elif self.phase == WARN:
             n = max(1, math.ceil(remaining))
             text = f"TSUNAMI za {n}…"
@@ -495,11 +507,10 @@ class TsunamiGame(Game):
             p.text(text, x0 + sign + big * 0.3, ch / 2, size=big, anchor="ml", bold=True, color=col, outline=6)
         elif self.phase in (WAVE, RECEDE):
             title = "VLNA!" if self.phase == WAVE else "Voda ustupuje zpět do moře…"
-            p.text(title, cw / 2, top_y, size=int(size * (1.4 if self.phase == WAVE else 1.0)), anchor="tc",
-                   bold=True, color=(1, 1, 1, 1), outline=4)
+            hud.label(p, title, cw / 2, top_y, int(size * (1.4 if self.phase == WAVE else 1.0)), anchor="tc")
             hit = sum(self.town_flooded)
-            p.text(f"Zaplaveno {self.flooded_pct:.0f} % pevniny · zatopená města: {hit}/{len(self.towns)}",
-                   cw / 2, bottom_y, size=small, anchor="bc", color=(1, 0.85, 0.3, 1), outline=3)
+            hud.label(p, f"Zaplaveno {self.flooded_pct:.0f} % pevniny · zatopená města: {hit}/{len(self.towns)}",
+                      cw / 2, bottom_y, small, anchor="bc", color=hud.YELLOW)
         elif self.phase == RESULT and self.last_result is not None:
             pct, saved, total = self.last_result
             cy = size * 1.85  # nahoře, kam se města nestaví
@@ -520,6 +531,7 @@ class TsunamiGame(Game):
         elif name == "s":
             self.edge_fixed = (self.edge + 1) % 4
             self.seafill = None
+            self._planned = False
             if self.sim is not None:
                 self.sim.clear()
             self._set_phase(CALM, max(FIRST_CALM, self.phase_len - self.phase_t) if self.phase == CALM else 8.0)

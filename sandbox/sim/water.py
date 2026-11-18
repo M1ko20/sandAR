@@ -25,6 +25,23 @@ class WaterSim:
         """Objem vody [m³]."""
         return float(self.depth.sum()) * self.cell * self.cell
 
+    def velocity(self, min_depth: float = 0.002, max_speed: float = 0.6) -> tuple[np.ndarray, np.ndarray]:
+        """Rychlost vody v buňkách (vx, vy) [m/s] z toků v trubkách (průměr přítoku a odtoku)."""
+        fl, fr, ft, fb = self.fl, self.fr, self.ft, self.fb
+        qx = fr - fl
+        qy = fb - ft
+        qx[:, 1:] += fr[:, :-1]  # přítok zleva teče doprava
+        qx[:, :-1] -= fl[:, 1:]
+        qy[1:, :] += fb[:-1, :]
+        qy[:-1, :] -= ft[1:, :]
+        k = 0.5 / (self.cell * np.maximum(self.depth, min_depth))
+        vx = np.clip(qx * k, -max_speed, max_speed)
+        vy = np.clip(qy * k, -max_speed, max_speed)
+        dry = self.depth < 1e-4
+        vx[dry] = 0
+        vy[dry] = 0
+        return vx.astype(np.float32), vy.astype(np.float32)
+
     def clear(self) -> None:
         for a in (self.depth, self.fl, self.fr, self.ft, self.fb):
             a[:] = 0

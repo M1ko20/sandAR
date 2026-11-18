@@ -1,7 +1,8 @@
 """Živá sopka: postav z písku kopec a sleduj, jak z něj vytéká láva.
 
-Program najde nejvyšší vrchol (nebo vrchol, nad který návštěvník podrží ruku)
-a nechá ho vybuchnout. Láva teče podle skutečného sklonu písku (viskózní
+Program najde nejvyšší vrchol a označí ho jako sopku (kruh „SOPKA“ přímo na písku),
+15 s odpočítává a pak sopka vybuchne. Během odpočtu se kráter stěhuje na nejvyšší vrchol,
+jak návštěvníci stavějí; poslední vteřiny je pevný. Láva teče podle skutečného sklonu písku (viskózní
 simulace ``sandbox.sim.lava``), chladne z bílé přes oranžovou a tmavě červenou
 až v černou krustu s žhnoucími puklinami a zastaví se.
 
@@ -125,9 +126,10 @@ void main() {
 
 # fáze cyklu: (název, délka [s])
 CALM, RUMBLE, ERUPT, COOL, FADE = "klid", "probouzení", "erupce", "chladnutí", "vyhasínání"
-DURATION = {CALM: 14.0, RUMBLE: 4.0, ERUPT: 15.0, COOL: 18.0, FADE: 4.0}
+DURATION = {CALM: 12.0, RUMBLE: 3.0, ERUPT: 20.0, COOL: 15.0, FADE: 4.0}
+COUNTDOWN = DURATION[CALM] + DURATION[RUMBLE]  # [s] od označení sopky po erupci (15 s)
 NEXT = {CALM: RUMBLE, RUMBLE: ERUPT, ERUPT: COOL, COOL: FADE, FADE: CALM}
-FIRST_CALM = 3.0  # po spuštění/resetu se sopka probudí brzy (attract mode, snapshot)
+ERUPT_RATE = 2.6e-4  # [m³/s · m⁻²] výron lávy z kráteru (víc = delší proudy)
 DS = 2  # zmenšení mřížky pro simulaci lávy
 
 
@@ -270,18 +272,20 @@ def disc_triangles(centers: np.ndarray, radii: np.ndarray, colors: np.ndarray, s
 class VolcanoGame(Game):
     id = "sopka"
     title = "Živá sopka"
-    description = "Postav sopku z písku. Z vrcholu vyteče žhavá láva – ochraň vesnice pod sopkou hrázemi."
+    description = "Nejvyšší kopec je sopka. Po odpočtu z ní vyteče láva – ochraň vesnice hrázemi z písku."
     order = 60
     category = "zážitek"
-    intro = "Postav sopku a podrž nad ní ruku – probudí se! Pak hrázemi z písku ochraň vesnice pod ní."
+    intro = "Nejvyšší kopec je sopka – za 15 s vybuchne! Hrázemi z písku ochraň vesnice pod ní."
     keys = [
-        ("ruka", "ruka nad vrcholem probudí sopku"),
         ("E", "erupce hned"),
         ("A", "automatický cyklus zap/vyp"),
         ("V", "vesnice zap/vyp"),
         ("X", "smazat lávu"),
         ("↑ / ↓", "síla erupce"),
     ]
+
+    WALL_GAP = 0.10  # [m] kráter ne blíž ke stěně (u stěn bývá nahrnutý písek)
+    MOVE_MARGIN = 0.015  # [m] o kolik musí být jiný vrchol vyšší, aby se sopka přestěhovala
 
     def start(self) -> None:
         self.prog = self.host.program(FRAG)
@@ -296,7 +300,6 @@ class VolcanoGame(Game):
         self.vent = (0, 0)  # (iy, ix) v mřížce simulace
         self.vent_m = (0.5, 0.4)  # kráter v metrech
         self.vent_height = 0.0
-        self.hand_time = 0.0
         self.eruptions = 0
         self.fade = 1.0
         self.show_villages = getattr(self, "show_villages", True)
@@ -304,7 +307,11 @@ class VolcanoGame(Game):
         self._place_pending = True
         self.saved_last: tuple[int, int] | None = None
         self.clock = 0.0
-        self._set_phase(CALM, FIRST_CALM)
+        self._start_calm()
+
+    def _start_calm(self) -> None:
+        """Klid po spuštění/resetu: odpočet se prodlouží o úvodní slajd (ten zakryje střed písku)."""
+        self._set_phase(CALM, DURATION[CALM] + self.host.settings.attract.intro_seconds)
 
     def stop(self) -> None:
         self.prog.release()
@@ -318,11 +325,10 @@ class VolcanoGame(Game):
             self.sim.clear()
         self.particles.clear()
         self.fade = 1.0
-        self.hand_time = 0.0
         self.villages = []
         self._place_pending = True
         self.saved_last = None
-        self._set_phase(CALM, FIRST_CALM)
+        self._start_calm()
 
     # --- fáze ------------------------------------------------------------------------
     def _set_phase(self, phase: str, duration: float | None = None) -> None:
@@ -340,11 +346,13 @@ class VolcanoGame(Game):
         if phase == CALM:
             self._place_pending = True  # nový cyklus = nové vesnice (terén se mezitím změnil)
 
-    def _wake(self, hm, near_m: tuple[float, float] | None = None) -> None:
-        """Probudí sopku: zvolí kráter a přejde do fáze probouzení."""
-        self._choose_vent(hm, near_m)
+    def _wake(self, hm) -> None:
+        """Probudí sopku: kráter se zafixuje na nejvyšším vrcholu, vesnice zůstanou."""
+        old = self.vent_m
+        self._choose_vent(hm)
         self._set_phase(RUMBLE)
-        self._place_villages(hm)
+        if self._place_pending or math.dist(old, self.vent_m) > 0.12:
+            self._place_villages(hm)
 
     def _place_villages(self, hm) -> None:
         self._place_pending = False
@@ -356,17 +364,24 @@ class VolcanoGame(Game):
         names = list(self.rng.permutation(VILLAGE_NAMES))
         self.villages = [build_village(names[i], x, y, self.rng) for i, (x, y) in enumerate(spots)]
 
-    def _choose_vent(self, hm, near_m: tuple[float, float] | None = None) -> None:
+    def _choose_vent(self, hm, sticky: bool = False) -> None:
+        """Kráter = nejvyšší vrchol (ne u stěn, kde se písek nahrne o okraj).
+
+        ``sticky``: během odpočtu se kráter přestěhuje, jen když je jiný vrchol zřetelně vyšší
+        (o ``MOVE_MARGIN``) – drobné změny písku a ruka nad vrcholem ho nerozhodí."""
         gh, gw = hm.shape
         cw, ch = hm.cell_size
-        near = None
-        radius = 0.0
-        if near_m is not None:
-            near = (near_m[1] / ch, near_m[0] / cw)
-            radius = 0.25 / cw
-        iy, ix, rel = find_vent(hm.heights, hm.hands, near, radius, border=max(2, gw // 40))
-        if near is not None and rel < 0.015:  # pod rukou není kopec -> nejvyšší vrchol celkově
-            iy, ix, rel = find_vent(hm.heights, hm.hands, border=max(2, gw // 40))
+        border = max(2, int(round(self.WALL_GAP / cw)))
+        iy, ix, rel = find_vent(hm.heights, hm.hands, border=border)
+        if sticky and self.sim is not None:
+            oy, ox = int(self.vent[0] * DS), int(self.vent[1] * DS)
+            oy, ox = min(max(oy, 0), gh - 1), min(max(ox, 0), gw - 1)
+            s = blur3(blur3(hm.heights))
+            win = (slice(max(0, oy - 3), oy + 4), slice(max(0, ox - 3), ox + 4))
+            covered = hm.hands is not None and hm.hands.shape == s.shape and hm.hands[win].any()
+            if covered or float(s[iy, ix] - s[oy, ox]) < self.MOVE_MARGIN:
+                iy, ix = oy, ox
+                rel = float(s[oy, ox] - np.median(s)) if not covered else self.vent_height
         self.vent_height = rel
         self.vent_m = ((ix + 0.5) * cw, (iy + 0.5) * ch)
         self.vent = (iy / DS, ix / DS)
@@ -391,11 +406,17 @@ class VolcanoGame(Game):
 
         self.phase_t += dt
         self.clock += dt
-        self._hand_trigger(hm, dt)
-        if self.phase == CALM and self.phase_t < 0.05:
-            self._choose_vent(hm)
-        if self._place_pending and self.phase == CALM and self.phase_t > 0.5:
-            self._place_villages(hm)  # v klidu podle aktuálního terénu, ať je vidět, co chránit
+        if self.phase == CALM:
+            # sopka = nejvyšší vrchol; během odpočtu ho sleduje, jak se staví
+            self._vent_t = getattr(self, "_vent_t", 0.0) + dt
+            if self.phase_t < 0.05 or self._vent_t > 0.5:
+                self._vent_t = 0.0
+                old = self.vent_m
+                self._choose_vent(hm, sticky=self.phase_t >= 0.05)
+                if self.villages and math.dist(old, self.vent_m) > 0.12:
+                    self._place_pending = True  # sopka se přestěhovala -> vesnice k ní
+            if self._place_pending and self.phase_t > 0.5:
+                self._place_villages(hm)  # v klidu podle aktuálního terénu, ať je vidět, co chránit
         if self.phase_t >= self.phase_len:
             if self.phase == CALM:
                 if self.auto:
@@ -409,8 +430,8 @@ class VolcanoGame(Game):
             # pulzující výron (fontána), slábne ke konci erupce
             k = self.phase_t / self.phase_len
             pulse = 0.65 + 0.35 * math.sin(self.phase_t * 5.3) * math.sin(self.phase_t * 1.7 + 1)
-            rate = 1.2e-4 * self.power * pulse * (1.0 - 0.6 * k)
-            sim.erupt(self.vent[0], self.vent[1], 2.5, rate, dt)
+            rate = ERUPT_RATE * self.power * pulse * (1.0 - 0.45 * k)
+            sim.erupt(self.vent[0], self.vent[1], 3.0, rate, dt)
         if self.phase == FADE:
             self.fade = max(0.0, 1.0 - self.phase_t / self.phase_len)
             if self.phase_t + dt >= self.phase_len:
@@ -441,21 +462,6 @@ class VolcanoGame(Game):
                 win = (slice(max(0, iy - 1), iy + 2), slice(max(0, ix - 1), ix + 2))
                 if (sim.thickness[win] > 0.0012).any() and (sim.temp[win] > sim.solid).any():
                     h.flooded, h.flooded_at = True, self.clock
-
-    def _hand_trigger(self, hm, dt: float) -> None:
-        """Ruka podržená nad kopcem (do 25 cm) v klidu sopku probudí."""
-        if self.phase != CALM or not hm.hand_points:
-            self.hand_time = 0.0
-            return
-        self.hand_time += dt
-        if self.hand_time >= 1.0:
-            self.hand_time = 0.0
-            hx, hy = hm.hand_points[0]
-            if self.sim is not None and self.phase == FADE:
-                self.sim.clear()
-            self.fade = 1.0
-            self._wake(hm, (hx, hy))
-            self.host.notify("Probudil(a) jsi sopku!")
 
     def _particles(self, dt: float) -> None:
         p = self.particles
@@ -502,7 +508,30 @@ class VolcanoGame(Game):
                                   u_solid=float(self.sim.solid), u_fade=float(self.fade))
         self._draw_villages()
         self._draw_particles()
+        self._draw_marker()
         self._labels()
+
+    def _draw_marker(self) -> None:
+        """Před erupcí: kde je sopka (kruh přímo na kráteru) – lidé vědí, odkud poteče láva."""
+        if self.phase not in (CALM, RUMBLE):
+            return
+        p = self.host.painter
+        canvas = self.host.canvas_size
+        sx, sy = canvas[0] / self.host.box_size[0], canvas[1] / self.host.box_size[1]
+        x, y = self.vent_m[0] * sx, self.vent_m[1] * sy
+        t = self.host.time
+        urgent = self.phase == RUMBLE
+        r = 0.07 * sx
+        col = (1.0, 0.35, 0.1, 1) if urgent and int(t * 4) % 2 else (1.0, 0.8, 0.2, 1)
+        w = max(4.0, canvas[1] / 110)
+        p.circle(x, y, r, (0, 0, 0, 0.6), width=w * 2.2)
+        p.circle(x, y, r, col, width=w)
+        ph = (t * (1.5 if urgent else 0.7)) % 1.0  # vlna od kráteru
+        p.circle(x, y, r * (1 + 1.2 * ph), (col[0], col[1], col[2], 0.8 * (1 - ph)), width=w * 0.7)
+        sz = hud.size(canvas, 0.7)
+        above = y - r - sz * 0.2 > sz * 3.2  # nahoře je hlavní nápis – jinak popisek pod kruh
+        hud.label(p, "SOPKA", x, y - r - sz * 0.2 if above else y + r + sz * 0.2, sz, color=col,
+                  anchor="bc" if above else "tc")
 
     def _draw_villages(self) -> None:
         if not self.villages:
@@ -554,19 +583,23 @@ class VolcanoGame(Game):
         n_v = len(self.villages)
         safe = sum(not v.burned for v in self.villages)
         if self.phase == CALM:
-            top = "Postav z písku vysokou sopku!" if self.vent_height < 0.02 else "Sopka spí…"
+            left = math.ceil(remaining + DURATION[RUMBLE])
+            top = f"Sopka vybuchne za {left} s" if self.auto else "Sopka spí (erupce klávesou E)"
             color = hud.WHITE
-            if self.saved_last is not None and self.phase_t < 8.0:
+            if self.saved_last is not None and self.phase_t < 6.0:
                 s_, n_ = self.saved_last
                 top = f"Zachránili jste {s_} z {n_} vesnic!" if s_ else "Láva zničila všechny vesnice…"
                 color = hud.GREEN if s_ == n_ else hud.YELLOW
-            if self.auto:
-                bottom = f"Podrž ruku nad vrcholem – nebo počkej {remaining:.0f} s"
+            if self.vent_height < 0.02:
+                bottom = "Postav z písku vysoký kopec – nejvyšší vrchol je sopka"
+            elif n_v:
+                bottom = "Láva poteče ze sopky dolů – postav hráze, ať ochráníš vesnice"
             else:
-                bottom = "Podrž ruku nad vrcholem a sopka se probudí"
+                bottom = "Nejvyšší vrchol je sopka – odtud poteče láva"
         elif self.phase == RUMBLE:
-            top = "Sopka se probouzí – rychle postav hráze!" if n_v else "Sopka se probouzí…"
+            top = f"Sopka vybuchne za {math.ceil(remaining)} s!"
             color = (1.0, 0.55, 0.15, 1)
+            bottom = "Rychle – hráze z písku kolem vesnic!" if n_v else None
         elif self.phase == ERUPT:
             if self.phase_t < 3.0:
                 top = "ERUPCE!"

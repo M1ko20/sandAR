@@ -116,7 +116,7 @@ class SimulatedSensor(DepthSensor):
             d = [px, W - px, py, D - py]
             k = int(np.argmin(d))
             ex, ey = [(-0.35, py), (W + 0.35, py), (px, -0.35), (px, D + 0.35)][k]
-            ez = self.WALL_HEIGHT + 0.30
+            ez = self.WALL_HEIGHT + max(0.30, ph + 0.05)  # zvednutá ruka = zvednuté rameno
             sx, sy = px - ex, py - ey
             L2 = sx * sx + sy * sy
             t = np.clip(((self._gx - ex) * sx + (self._gy - ey) * sy) / L2, 0, 1)

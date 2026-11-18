@@ -167,7 +167,22 @@ def _canyon(X, Y):
     return walls - cut
 
 
+def _massif(X, Y):
+    """Hlavní předloha: hora s vedlejším vrcholem, spojené hřbetem se sedlem (jako skutečné pohoří).
+
+    Velké a hladké tvary (svahy do ~25°, drť je udrží), žádné prohlubně pod okolní písek –
+    postaví se jen nahrnutím písku a dá se udělat na 100 %."""
+    main = _gauss(X, Y, -0.20, -0.03, 0.14)
+    side = 0.62 * _gauss(X, Y, 0.21, 0.05, 0.12)
+    ax, ay, bx, by = -0.20, -0.03, 0.21, 0.05
+    t = np.clip(((X - ax) * (bx - ax) + (Y - ay) * (by - ay)) / ((bx - ax) ** 2 + (by - ay) ** 2), 0, 1)
+    ridge = 0.42 * np.exp(-((X - ax - t * (bx - ax)) ** 2 + (Y - ay - t * (by - ay)) ** 2) / (2 * 0.075 ** 2))
+    p = 4.0  # měkké maximum – plynulé napojení hřbetu na vrcholy
+    return (main ** p + side ** p + ridge ** p) ** (1 / p)
+
+
 BUILTIN = [
+    Target("Hora se sedlem", _massif),
     Target("Kopec", lambda X, Y: _gauss(X, Y, 0, 0, 0.13)),
     Target("Sopka s kráterem", _volcano),
     Target("Dva vrcholy a sedlo", lambda X, Y: _gauss(X, Y, -0.2, 0, 0.1) + 0.8 * _gauss(X, Y, 0.2, 0.02, 0.1)),
@@ -205,6 +220,11 @@ def save_capture(heights: np.ndarray, directory: Path = TARGETS_DIR) -> Path:
     return path
 
 
+def _excess(x: np.ndarray, tol: float) -> np.ndarray:
+    """Odchylka nad toleranci (co je v toleranci, je přesná shoda)."""
+    return np.maximum(np.abs(x) - tol, 0.0)
+
+
 @dataclass
 class Score:
     score: float  # 0..100, 100 = přesná shoda
@@ -228,8 +248,9 @@ def evaluate(current: np.ndarray, target: np.ndarray, tolerance: float, border: 
              mask: np.ndarray | None = None) -> tuple[Score, np.ndarray]:
     """Porovná terén s předlohou v oblasti ``mask`` (hlavní část předlohy; None = celá bedna).
 
-    Skóre = 1 − RMSE / RMSE(rovný písek), takže uhlazený písek má 0 %, přesná kopie
-    100 %. Celkový posun výšky se odečte (množství písku žák neovlivní).
+    Skóre = 1 − E / E(rovný písek), kde E = RMS odchylky nad toleranci: uhlazený písek má 0 %,
+    terén všude v toleranci (celá hlavní část zelená) 100 %. Celkový posun výšky se odečte
+    (množství písku žák neovlivní).
     Vrací (skóre, rozdíl current − target po odečtení posunu).
     """
     region = _region(target.shape, border, mask)
@@ -239,20 +260,22 @@ def evaluate(current: np.ndarray, target: np.ndarray, tolerance: float, border: 
     d = diff[region]
     rmse = float(np.sqrt(np.mean(d**2)))
     t = target[region]
-    baseline = float(np.sqrt(np.mean((t - np.median(t)) ** 2))) or 1e-6
-    score = float(np.clip(1 - rmse / baseline, 0, 1) * 100)
+    err = float(np.sqrt(np.mean(_excess(d, tolerance) ** 2)))
+    baseline = float(np.sqrt(np.mean(_excess(t - np.median(t), tolerance) ** 2))) or 1e-6
+    score = float(np.clip(1 - err / baseline, 0, 1) * 100)
     within = float(np.mean(np.abs(d) <= tolerance) * 100)
     return Score(score, within, rmse, offset), diff.astype(np.float32)
 
 
 def evaluate_shape(current: np.ndarray, target: np.ndarray, border: float = 0.05, sigma: float = 2.0,
-                   scale: tuple[float, float] = (0.6, 1.4), mask: np.ndarray | None = None
-                   ) -> tuple[Score, np.ndarray]:
+                   scale: tuple[float, float] = (0.6, 1.4), mask: np.ndarray | None = None,
+                   tolerance: float = 0.01) -> tuple[Score, np.ndarray]:
     """Mírné hodnocení (pro jednoho hráče): počítá hlavně tvar, ne přesnou výšku.
 
     Oba povrchy se vyhladí (drobné hrbolky nevadí) a předloha se smí natáhnout nebo
     zmenšit v rozsahu ``scale`` – kopec poloviční výšky tak dostane většinu bodů.
-    Skóre = 1 − RMSE / RMS(předlohy po škálování): rovný písek 0 %, správný tvar 100 %.
+    Skóre = 1 − E / E(rovný písek), E = RMS odchylky nad ``tolerance``: rovný písek 0 %,
+    správný tvar 100 %.
     Vrací (skóre, rozdíl current − (a·target + posun)) jako ``evaluate``.
     """
     region = _region(target.shape, border, mask)
@@ -264,8 +287,9 @@ def evaluate_shape(current: np.ndarray, target: np.ndarray, border: float = 0.05
     a = float(np.clip(np.sum(c0 * t0) / tt, *scale))
     resid = c0 - a * t0
     rmse = float(np.sqrt(np.mean(resid**2)))
-    baseline = a * float(np.sqrt(tt / t0.size)) or 1e-6
-    score = float(np.clip(1 - rmse / baseline, 0, 1) * 100)
+    err = float(np.sqrt(np.mean(_excess(resid, tolerance) ** 2)))
+    baseline = float(np.sqrt(np.mean(_excess(a * t0, tolerance) ** 2))) or 1e-6
+    score = float(np.clip(1 - err / baseline, 0, 1) * 100)
     offset = cm - a * tm
     diff = (current - (a * target + offset)).astype(np.float32)
     within = float(np.mean(np.abs(resid) <= 0.03) * 100)

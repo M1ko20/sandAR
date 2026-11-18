@@ -20,9 +20,10 @@ HeightMap ─► games/<mód>.py ─► plátno (pohled shora) ─► projector/
   `start/stop/update(hm, dt)/render/key/status/reset`. Jádro se kvůli módu nemění.
 * `sandbox/sim/` – znovupoužitelné simulace: `water.py` (virtual pipes), `lava.py`, `ball.py`, `ecosystem.py`,
   `fauna.py` (12 druhů zvířat podle prostředí).
-* `sandbox/render/` – `glsl.py` (sdílená GLSL knihovna: height_at, elevation_color, contours, hillshade),
+* `sandbox/render/` – `glsl.py` (sdílená GLSL knihovna: height_at, elevation_color, contours, hillshade,
+  `water_shade` = jednotná voda s proudem podle rychlosti, průhlednými mělčinami a pěnou),
   `host.py` (RenderHost pro módy), `painter.py` (2D kreslení, text; na plátně vynucuje písmo ≥ výška/30),
-  `hud.py` (jednotný vzhled textů: label, legend, bar, fit), `fx.py` (déšť z ruky), `fauna.py` (kreslení
+  `hud.py` (jednotný vzhled textů: label, legend, bar, fit), `fx.py` (déšť z ruky, `WaterLayer` = textury hloubky a rychlosti pro water_shade), `fauna.py` (kreslení
   zvířat), `window.py` (GLFW; na Linuxu nativní Wayland, OpenGL přes vlastní loader).
 * `sandbox/terrain/` – kalibrace Kinectu (rohy podle stěn bedny), `processor.py` (výšková mapa,
   časový filtr; pixely ruky vyřadí), `hands.py` (detekce a sledování rukou z hloubky: pozadí po pixelech,
@@ -54,8 +55,9 @@ zbytečné závislosti; config jsou dataclassy + JSON.
 - Detekce rukou z hloubky (`terrain/hands.py`), naladěná na skutečné nahrávce `recordings/ruce.npz`
   (více lidí z libovolné strany, ruka na písku se nepropíše do terénu)
 - Módy (pořadí = klávesy): mapy (topo, mapa, výška) → příroda (skutečná krajina/ortofoto, voda,
-  ekosystém, sopka s vesnicemi, tsunami) → hry (kulička, poklad, záchrana města, nejvyšší hora,
-  postav podle předlohy – 16 předloh, hodnotí se jen hlavní část) → pro dva (níže)
+  ekosystém, sopka s vesnicemi a 15s odpočtem, tsunami) → hry (kulička, poklad, záchrana města,
+  nejvyšší hora 30 s, postav podle předlohy – 17 předloh, hlavní „Hora se sedlem“, hodnotí se jen
+  hlavní část, odchylka do tolerance = shoda) → pro dva (níže)
 - Hry pro dva hráče (`games/versus.py` = půlky, dělicí čára, text otočený k hráči u kratší strany):
   vodní válka, král kopce, potopa ostrovů, modeluj podle předlohy (P = 1 hráč s mírným hodnocením)
 
@@ -72,7 +74,8 @@ zbytečné závislosti; config jsou dataclassy + JSON.
 - Texty pro návštěvníky česky (s diakritikou), čitelné ze 2 m (font ≥ výška plátna / 30), jasné barvy (tmavá místnost).
 - Mód musí reagovat na skutečný terén, mít `intro`, `reset()` a běžet s rezervou na 60 FPS (numpy vektorizovaně).
 - Klávesy, které bere jádro: Esc, Tab, 0–9 (i se Shiftem), C, H, Z, Backspace (pokud ho mód nepoužije), v simulaci F, N.
-- Ruce v módech: `hm.hand_list` (dlaň `pos`, špička `tip`, `height` nad pískem, `id`), přítomnost `hm.has_hands`.
+- Ruce v módech: `hm.hand_list` (dlaň `pos`, špička `tip`, `height` nad pískem, `raised` = zvednutá
+  ≥ 25 cm, `id`), přítomnost `hm.has_hands`. Efekty „ze vzduchu“ (déšť) jen pro `raised`.
   Texty přes `render/hud.py` (label, legend), velikost `hud.size(canvas, k)`.
 - Ověření: `pytest`, `python -m sandbox snapshot --game <id> --duration <s>` (headless PNG),
   na hardwaru `checkcal` a běh s `--duration N --snapshot-dir DIR`.

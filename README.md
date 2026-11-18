@@ -106,15 +106,20 @@ Nástroj `build/kinect2_bridge/kinect2_snap` (barva srovnaná s hloubkou) se ses
    nápověda zmizí a zůstane čistá fotka. ←→ místo, M nápověda, V vrstevnice skutečného terénu.
    Data (ČÚZK – Ortofoto ČR a DMR 5G, zdarma, CC BY 4.0) se stahují předem: `python -m sandbox ortofoto`
    (potřebuje internet; uloží se do `data/ortofoto/`, na akci pak mód běží offline).
-5. **Voda a povodně** – z dlaně držené nad pískem prší (na ruku se promítne mráček, kolem dopadají kapky);
-   ruka v písku neprší, ať jde kopat koryta. R déšť všude, P povodeň, X vysušit, D odtok na okrajích.
+5. **Voda a povodně** – ze zvednuté dlaně (aspoň ~25 cm nad pískem) prší (na ruku se promítne mráček,
+   z mráčku padají kapky a odstřikují); ruka, která modeluje v písku, neprší, ať jde kopat koryta.
+   Je vidět, jak voda stéká po svahu (pramínky unášené po spádu), v jezerech se hladina vlní.
+   R déšť všude, P povodeň, X vysušit, D odtok na okrajích.
 6. **Živý ekosystém** – biomy, řeky, jezera, rostoucí lesy, sníh a 12 druhů zvířat, každý ve svém
    prostředí: ryby a kachny ve vodě, krabi a želvy na pláži, srnky, zajíci, lišky a motýli na loukách,
    medvěd v lese, kamzíci na skalách, orel nad horami, ptáci nad krajinou. Počet roste s velikostí
    prostředí, plachá zvířata utíkají před rukou.
-7. **Živá sopka** – láva vyteče z vrcholu, stéká po svahu a chladne v černou krustu. Pod sopkou stojí
-   vesnice – láva je zapálí, hrázemi a koryty je lze zachránit (E erupce, A automatický cyklus, V vesnice).
-8. **Mega tsunami** – z moře přijde vlna a zaplaví krajinu; hráze chrání města (T = vlna hned).
+7. **Živá sopka** – nejvyšší vrchol se označí kruhem „SOPKA“ a 15 s se odpočítává (kruh se během odpočtu
+   stěhuje na nejvyšší vrchol, jak lidé stavějí). Pak z něj vyteče láva, stéká po svahu a chladne v černou
+   krustu. Pod sopkou stojí vesnice – láva je zapálí, hrázemi a koryty je lze zachránit
+   (E erupce hned, A automatický cyklus, V vesnice).
+8. **Mega tsunami** – z moře přijde vlna a zaplaví krajinu; hráze chrání města (T = vlna hned). Strana
+   moře a města se vyberou na začátku kola a do vlny se nemění.
 
 **Hry (jeden hráč nebo tým)**
 
@@ -122,10 +127,13 @@ Nástroj `build/kinect2_bridge/kinect2_snap` (barva srovnaná s hloubkou) se ses
    K zapne odpalování kuličky rukou (výchozí vypnuto).
 10. **Hledání pokladu** – pod pískem jsou poklady, kopej; kruh kolem ruky napovídá „Zima / Teplo / Hoří!“.
 11. **Záchrana města** – povodeň z hor, postav hráze a zachraň co nejvíc domů (Enter = start).
-12. **Nejvyšší hora** – minutová soutěž, rekord dne a všech dob; V = nejhlubší propast.
-13. **Postav podle předlohy** – 16 předloh (kopec, sopka, kráter, řeka, hrad s příkopem, srdce, terasy,
-    kaňon…). Hodnotí se jen **hlavní část** v čárkovaném rámečku (tvar + 5 cm okolo), zbytek bedny je
-    ztmavený a nezáleží na něm. Červená = přidej, modrá = uber, zelená = sedí, cíl 80 %.
+    Ukáže se jen pramen („Odtud přijde voda!“), kudy voda poteče, musí hráči odhadnout sami.
+12. **Nejvyšší hora** – 30s soutěž, rekord dne a všech dob; V = nejhlubší propast.
+13. **Postav podle předlohy** – 17 předloh; první je **Hora se sedlem** (velká, realistická, jen nahrnutý
+    písek – dobře se ukazuje a jde postavit na 100 %), dál kopec, sopka, kráter, řeka, hrad s příkopem,
+    srdce, terasy, kaňon… Hodnotí se jen **hlavní část** v čárkovaném rámečku (tvar + 5 cm okolo), zbytek bedny je
+    ztmavený a nezáleží na něm. Červená = přidej, modrá = uber, zelená = sedí, cíl 80 %. Odchylka do
+    tolerance (1,5 cm) se počítá jako přesná shoda – celá zelená hlavní část = 100 %.
     M režim *Mapa* (jen vrstevnice, Enter = vyhodnotit), ←→ předloha, ↑↓ převýšení,
     **U uloží aktuální písek jako novou předlohu**.
 
@@ -160,9 +168,12 @@ strany, libovolný počet lidí. Hromádka písku okraje bedny nedosáhne, takž
 
 1. model pozadí po pixelech (vyhrabaný důlek se přijme hned, nová hromádka po ⅓ s, ruka nikdy),
 2. popředí rozříznuté podle hloubkových hran (ruka nad hromádkou se s ní nespojí),
-3. paže = oblast, která sahá za stěnu (nebo k tělu nakloněnému nad bednou); dlaň = konec paže
-   podle geodetické vzdálenosti od místa vstupu, dvě ruce na jedné paži/těle se rozliší větvením,
-4. sledování se stálým číslem ruky a vyhlazením One Euro.
+3. paže = oblast, která sahá za stěnu (nebo k tělu nakloněnému nad bednou); tělo se pozná podle
+   výšky (nad 40 cm) a šířky (hlava/trup je široký, zvednutá paže úzká), takže ruka se najde i
+   zvednutá vysoko (až ~85 cm, výš už Kinect nevidí); dlaň = konec paže podle geodetické vzdálenosti
+   od místa vstupu, dvě ruce na jedné paži/těle se rozliší větvením,
+4. sledování se stálým číslem ruky a vyhlazením One Euro; ruka výš než ~25 cm nad pískem je
+   „zvednutá“ (`Hand.raised`, s hysterezí) – na to reagují efekty ve vzduchu (déšť), modelování ne.
 
 Pixely ruky terén vůbec nepoužije – ruka položená na písku se do mapy nepropíše. V okně obsluhy je
 ruka v hloubkovém obraze fialová a v promítání má kroužek s číslem a výškou nad pískem. Naladěno

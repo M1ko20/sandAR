@@ -13,14 +13,15 @@ import math
 
 import numpy as np
 
+from ..render import hud
 from ..sim import ecosystem as eco
 from ..sim.water import WaterSim
+from ..render.fx import WaterLayer
 from .base import Game
 
 FRAG = """
 uniform sampler2D u_water;
-uniform sampler2D u_danger;   // předpověď: kam doteče voda (1 = zaplaveno)
-uniform int u_show_danger;
+uniform sampler2D u_vel;
 uniform float u_clock;
 void main() {
     vec2 uv = v_uv;
@@ -32,24 +33,10 @@ void main() {
     c = mix(c, c * 0.5, cl.x * 0.5);
     c = mix(c, c * 0.3, cl.y * 0.7);
 
-    if (u_show_danger == 1) {
-        // šrafování „sem doteče voda“ – pohyblivé modré pruhy
-        float dz = smoothstep(0.3, 0.7, texture(u_danger, uv).r);
-        vec2 p = uv * u_box;
-        float stripe = step(0.5, fract((p.x + p.y) * 22.0 - u_clock * 0.8));
-        c = mix(c, mix(vec3(0.20, 0.55, 1.0), vec3(0.55, 0.85, 1.0), stripe), dz * 0.55);
-    }
-    float w = texture(u_water, uv).r;
-    if (w > 0.0003) {
-        float a = smoothstep(0.0003, 0.003, w);
-        float d01 = clamp(w / 0.025, 0.0, 1.0);
-        vec3 wc = mix(vec3(0.30, 0.78, 1.0), vec3(0.02, 0.18, 0.75), d01);
-        float s = sin(uv.x * u_box.x * 80.0 + u_clock * 3.1) * sin(uv.y * u_box.y * 70.0 - u_clock * 2.6);
-        wc += 0.10 * s * (1.0 - d01);
-        // pěna na čele vlny (mělká voda)
-        wc = mix(wc, vec3(0.92, 0.98, 1.0), (1.0 - smoothstep(0.0006, 0.0025, w)) * 0.6);
-        c = mix(c, wc, a * 0.95);
-    }
+    float w = max(sample_bicubic(u_water, uv), 0.0);
+    vec2 v = texture(u_vel, uv).rg;
+    float foam = clamp((length(v) - 0.10) / 0.25, 0.0, 1.0) * (1.0 - smoothstep(0.002, 0.010, w)) * 0.55;
+    c = water_shade(c, uv, w, v, foam).rgb;
     f_color = vec4(c, 1.0);
 }
 """
@@ -155,9 +142,6 @@ class TownGame(Game):
         self.source: tuple[float, float] | None = None
         self.town: tuple[float, float] | None = None
         self.prev_town: tuple[float, float] | None = None
-        self.forecast: eco.FloodPlanner | None = None
-        self.danger_tex = None
-        self.has_danger = False
         self.phase = PREP
         self.phase_t = 0.0
         self.rounds = 0
@@ -167,10 +151,9 @@ class TownGame(Game):
 
     def stop(self) -> None:
         self.prog.release()
-        for tex in (self.tex, self.danger_tex):
-            if tex is not None:
-                tex.release()
-        self.tex = self.danger_tex = None
+        if self.tex is not None:
+            self.tex.release()
+        self.tex = None
 
     def reset(self) -> None:
         """Nové kolo: nové město (jinde než minule), suchá krajina, odpočet."""
@@ -195,8 +178,6 @@ class TownGame(Game):
         self.houses = []
         self.source = self.town = None
         self.phase, self.phase_t = PLAN, 0.0
-        self.forecast = None
-        self.has_danger = False
         self._need_town = False
 
     def _plan(self, hm) -> None:
@@ -219,33 +200,10 @@ class TownGame(Game):
         self.planner = None
         self.phase, self.phase_t = PREP, 0.0
 
-    def _update_danger(self, hm) -> None:
-        """Předpověď zaplavené oblasti – zkušební povodeň po současném terénu, počítaná po kouscích.
-
-        Když návštěvníci staví hráze, předpověď se každých pár sekund obnoví.
-        """
-        if self.forecast is None:
-            assert self.source is not None
-            factor = max(1, hm.shape[1] // 64)
-            self.forecast = eco.FloodPlanner(hm.heights, hm.size, [self.source], self._flow(hm), self.FLOOD_TIME,
-                                             factor=factor, threshold=self.FLOOD_DEPTH,
-                                             infiltration=self.INFILTRATION)
-        if self.forecast.step(12):
-            danger = np.isfinite(self.forecast.arrival[0]).astype(np.float32)
-            if self.danger_tex is None or self.danger_tex.size != (danger.shape[1], danger.shape[0]):
-                if self.danger_tex is not None:
-                    self.danger_tex.release()
-                self.danger_tex = self.host.float_texture((danger.shape[1], danger.shape[0]))
-            self.danger_tex.write(np.ascontiguousarray(danger).tobytes())
-            self.has_danger = True
-            self.forecast = None
-
     def update(self, hm, dt: float) -> None:
         if self.sim is None or self.sim.depth.shape != hm.shape:
             self.sim = WaterSim(hm.shape, hm.cell_size[0])
-            if self.tex is not None:
-                self.tex.release()
-            self.tex = self.host.float_texture((hm.shape[1], hm.shape[0]))
+            self.tex = self.tex or WaterLayer(self.host)
             self._need_town = True
         if self._need_town:
             self._new_round(hm)
@@ -256,7 +214,6 @@ class TownGame(Game):
         if self.phase == PLAN:
             self._plan(hm)
         elif self.phase == PREP:
-            self._update_danger(hm)
             if self.phase_t >= self.PREP_TIME:
                 self.phase, self.phase_t = FLOOD, 0.0
                 self.host.notify("Povodeň!")
@@ -275,7 +232,7 @@ class TownGame(Game):
         # vsakování; po povodni voda opadá rychleji
         eco.soak(sim.depth, (self.INFILTRATION if self.phase == FLOOD else 0.0005) * dt)
         assert self.tex is not None
-        self.tex.write(sim.depth.tobytes())
+        self.tex.write(sim)
 
     def _finish(self) -> None:
         saved = sum(not h.flooded for h in self.houses)
@@ -285,11 +242,9 @@ class TownGame(Game):
 
     # --- kreslení ------------------------------------------------------------------------------
     def render(self) -> None:
-        if self.tex is None:
+        if self.tex is None or not self.tex.ready:
             return
-        show = self.phase == PREP and self.has_danger and self.danger_tex is not None
-        self.host.draw_fullscreen(self.prog, u_water=(self.tex, 1), u_clock=float(self.clock),
-                                  u_danger=(self.danger_tex if show else self.tex, 2), u_show_danger=int(show))
+        self.host.draw_fullscreen(self.prog, **self.tex.uniforms(1), u_clock=float(self.clock))
         sx, sy = self._px()
         self._draw_source(sx, sy)
         self._draw_houses(sx, sy)
@@ -345,16 +300,15 @@ class TownGame(Game):
         n = len(self.houses)
         saved = sum(not h.flooded for h in self.houses)
         if self.phase == PLAN:
-            p.text("Hledám místo pro nové městečko…", cw / 2, size * 0.5, size=size, anchor="tc", bold=True,
-                   color=(1, 1, 1, 1), outline=3)
+            hud.label(p, "Hledám místo pro nové městečko…", cw / 2, size * 0.4, size, anchor="tc")
         elif self.phase == PREP:
             left = max(0, math.ceil(self.PREP_TIME - self.phase_t))
-            p.text(f"Povodeň za {left} s! Postav hráze a ochraň město.", cw / 2, size * 0.5, size=size, anchor="tc",
-                   bold=True, color=(1, 0.95, 0.3, 1), outline=3)
+            hud.label(p, f"Povodeň za {left} s! Postav hráze a ochraň město.", cw / 2, size * 0.4, size,
+                      anchor="tc", color=hud.YELLOW)
         elif self.phase == FLOOD:
             left = max(0, math.ceil(self.FLOOD_TIME - self.phase_t))
-            p.text(f"Povodeň! Ještě {left} s · domy v suchu: {saved}/{n}", cw / 2, size * 0.5, size=size,
-                   anchor="tc", bold=True, color=(0.55, 0.9, 1, 1), outline=3)
+            hud.label(p, f"Povodeň! Ještě {left} s · domy v suchu: {saved}/{n}", cw / 2, size * 0.4, size,
+                      anchor="tc", color=(0.55, 0.9, 1, 1))
         elif self.phase == RESULT and self.last_score is not None:
             s, total = self.last_score
             big = int(size * 1.7)

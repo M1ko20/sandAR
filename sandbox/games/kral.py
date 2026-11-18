@@ -163,7 +163,7 @@ class KingOfHillGame(Game):
             urgent = left <= 10
             vs.player_text(p, canvas, player, f"{vs.NAMES[player]}: {pts} b.", 0.035, size)
             msg = "Jsi král kopce!" if self.leader == player else "Přestav soupeře!" if self.leader is not None \
-                else "Vyrovnáno!"
+                else "Kopce jsou stejně vysoké!"
             vs.player_text(p, canvas, player, f"{msg}  ·  zbývá {left} s", 0.095, small,
                            color=(1, 0.3, 0.25, 1) if urgent else (1, 1, 1, 1))
         elif self.state == RESULT:

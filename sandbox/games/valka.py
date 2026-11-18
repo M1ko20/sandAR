@@ -19,11 +19,13 @@ import numpy as np
 from ..sim import ecosystem as eco
 from ..sim.water import WaterSim
 from . import versus as vs
+from ..render.fx import WaterLayer
 from .base import Game
 from .mesto import draw_house
 
 FRAG = """
 uniform sampler2D u_water;
+uniform sampler2D u_vel;
 uniform float u_clock;
 void main() {
     vec2 uv = v_uv;
@@ -34,16 +36,10 @@ void main() {
     vec2 cl = contours(h);
     c = mix(c, c * 0.5, cl.x * 0.5);
     c = mix(c, c * 0.3, cl.y * 0.7);
-    float w = texture(u_water, uv).r;
-    if (w > 0.0003) {
-        float a = smoothstep(0.0003, 0.003, w);
-        float d01 = clamp(w / 0.025, 0.0, 1.0);
-        vec3 wc = mix(vec3(0.30, 0.78, 1.0), vec3(0.02, 0.18, 0.75), d01);
-        float s = sin(uv.x * u_box.x * 80.0 + u_clock * 3.1) * sin(uv.y * u_box.y * 70.0 - u_clock * 2.6);
-        wc += 0.10 * s * (1.0 - d01);
-        wc = mix(wc, vec3(0.92, 0.98, 1.0), (1.0 - smoothstep(0.0006, 0.0025, w)) * 0.6);
-        c = mix(c, wc, a * 0.95);
-    }
+    float w = max(sample_bicubic(u_water, uv), 0.0);
+    vec2 v = texture(u_vel, uv).rg;
+    float foam = clamp((length(v) - 0.10) / 0.25, 0.0, 1.0) * (1.0 - smoothstep(0.002, 0.010, w)) * 0.55;
+    c = water_shade(c, uv, w, v, foam).rgb;
     f_color = vec4(c, 1.0);
 }
 """
@@ -123,9 +119,7 @@ class WaterWarGame(Game):
     def update(self, hm, dt: float) -> None:
         if self.sim is None or self.sim.depth.shape != hm.shape:
             self.sim = WaterSim(hm.shape, hm.cell_size[0])
-            if self.tex is not None:
-                self.tex.release()
-            self.tex = self.host.float_texture((hm.shape[1], hm.shape[0]))
+            self.tex = self.tex or WaterLayer(self.host)
             self._new_round_pending = True
         if self._new_round_pending:
             self._new_round(hm)
@@ -149,7 +143,7 @@ class WaterWarGame(Game):
         sim.advance(hm.heights, dt, 9.81)
         eco.soak(sim.depth, (self.INFILTRATION if self.phase == FLOOD else 0.0006) * dt)
         assert self.tex is not None
-        self.tex.write(sim.depth.tobytes())
+        self.tex.write(sim)
 
     def _start_flood(self) -> None:
         self.phase, self.phase_t = FLOOD, 0.0
@@ -169,9 +163,9 @@ class WaterWarGame(Game):
 
     # --- kreslení ------------------------------------------------------------------------------
     def render(self) -> None:
-        if self.tex is None:
+        if self.tex is None or not self.tex.ready:
             return
-        self.host.draw_fullscreen(self.prog, u_water=(self.tex, 1), u_clock=float(self.clock))
+        self.host.draw_fullscreen(self.prog, **self.tex.uniforms(1), u_clock=float(self.clock))
         p = self.host.painter
         canvas = self.host.canvas_size
         vs.draw_divider(p, canvas)

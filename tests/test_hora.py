@@ -101,7 +101,7 @@ def test_mountain_round_flow(tmp_path, monkeypatch):
     for _ in range(30):  # ruka nad pískem -> kolo začne
         game.update(heightmap(hill(h=0.02), hands), 1 / 30)
     assert game.state == "round"
-    for _ in range(30 * 58):
+    for _ in range(30 * 28):
         game.update(heightmap(hill(h=0.06)), 1 / 30)
     assert game.state == "round"
     for _ in range(30 * 3):
@@ -116,7 +116,7 @@ def test_mountain_round_flow(tmp_path, monkeypatch):
     assert game.state == "ready"
     # druhé kolo horší -> není rekord, 2. místo
     game.key("enter")
-    for _ in range(30 * 61):
+    for _ in range(30 * 31):
         game.update(heightmap(hill(h=0.04)), 1 / 30)
     assert game.state == "result" and not game.is_record and game.rank == 2
     assert any("rekord" in s.lower() for s in game.status())
@@ -129,7 +129,7 @@ def test_pit_variant(tmp_path, monkeypatch):
     assert game.key("v") and game.variant == "propast"
     game.key("space")
     pit = hill(h=0.05) - hill(h=0.04, cx=110)
-    for _ in range(30 * 61):
+    for _ in range(30 * 31):
         game.update(heightmap(pit), 1 / 30)
     assert game.state == "result" and game.final == pytest.approx(-0.04, abs=0.005)
     rec = Records(tmp_path / "records.json").record("propast")

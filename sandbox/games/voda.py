@@ -1,16 +1,18 @@
 """Voda: déšť, stékání ze svahů, jezera a povodně.
 
 Simulace mělké vody metodou „virtuálních trubek“ (Mei et al. 2007): mezi
-sousedními buňkami teče voda úměrně rozdílu hladin. Z každé dlaně držené nad pískem
-prší (na hřbetu ruky se promítne mráček, kolem dopadají kapky); ruka v písku neprší,
-aby šlo kopat koryta. Klávesou R prší všude.
+sousedními buňkami teče voda úměrně rozdílu hladin. Z každé dlaně zvednuté nad písek
+(aspoň ~25 cm) prší – na hřbetu ruky se promítne mráček, kolem dopadají kapky. Ruka, která
+modeluje v písku, neprší, aby šlo kopat koryta. Klávesou R prší všude.
 """
 
 from __future__ import annotations
 
+import moderngl
 import numpy as np
 
 from ..render.fx import RainFx
+from ..sim.lava import blur3
 from ..sim.water import WaterSim
 from .base import Game
 
@@ -19,6 +21,7 @@ __all__ = ["WaterGame", "WaterSim"]
 
 FRAG = """
 uniform sampler2D u_water;
+uniform sampler2D u_vel;     // rychlost vody [m/s] (rg)
 void main() {
     vec2 uv = v_uv;
     float h = height_at(uv);
@@ -28,15 +31,12 @@ void main() {
     c = mix(c, c * 0.45, cl.x * 0.6);
     c = mix(c, c * 0.25, cl.y * 0.8);
 
-    float w = texture(u_water, uv).r;
-    if (w > 0.0003) {
-        float a = smoothstep(0.0003, 0.005, w);
-        vec3 wc = mix(vec3(0.40, 0.75, 1.0), vec3(0.02, 0.16, 0.55), clamp(w / 0.04, 0.0, 1.0));
-        float s = sin(uv.x * u_box.x * 70.0 + u_time * 2.3) * sin(uv.y * u_box.y * 63.0 - u_time * 1.9);
-        wc += 0.06 * s * (1.0 - clamp(w / 0.04, 0.0, 1.0));
-        c = mix(c, wc, a * 0.92);
-    }
-    f_color = vec4(c, 1.0);
+    float w = max(sample_bicubic(u_water, uv), 0.0);
+    vec2 v = texture(u_vel, uv).rg;
+    // pěna tam, kde voda rychle stéká mělkým korytem (bystřina)
+    float foam = clamp((length(v) - 0.10) / 0.25, 0.0, 1.0) * (1.0 - smoothstep(0.002, 0.010, w)) * 0.55;
+    vec4 r = water_shade(c, uv, w, v, foam);
+    f_color = vec4(r.rgb, 1.0);
 }
 """
 
@@ -44,12 +44,12 @@ void main() {
 class WaterGame(Game):
     id = "voda"
     title = "Voda a povodně"
-    description = "Podrž dlaň nad pískem a začne z ní pršet. Voda stéká do údolí a tvoří jezera."
+    description = "Zvedni ruku vysoko nad písek a začne z ní pršet. Voda stéká do údolí a tvoří jezera."
     order = 50
     category = "simulace"
-    intro = "Podrž dlaň nad pískem – začne z ní pršet. Kam poteče voda?"
+    intro = "Zvedni ruku vysoko nad písek (aspoň 25 cm) – začne z ní pršet. Kam poteče voda?"
     keys = [
-        ("ruka", "déšť z dlaně (ruka v písku neprší)"),
+        ("ruka", "zvednutá dlaň = déšť (při modelování neprší)"),
         ("R", "déšť všude zap/vyp"),
         ("P", "povodeň (+1 cm vody)"),
         ("X", "vysušit"),
@@ -61,6 +61,7 @@ class WaterGame(Game):
         self.prog = self.host.program(FRAG)
         self.sim: WaterSim | None = None
         self.tex = None
+        self.vel_tex = None
         self.raining = False
         self.drain = False
         self.fx = RainFx()
@@ -72,16 +73,21 @@ class WaterGame(Game):
 
     def stop(self) -> None:
         self.prog.release()
-        if self.tex is not None:
-            self.tex.release()
-            self.tex = None
+        for tex in (self.tex, self.vel_tex):
+            if tex is not None:
+                tex.release()
+        self.tex = self.vel_tex = None
 
     def update(self, hm, dt: float) -> None:
         if self.sim is None or self.sim.depth.shape != hm.shape:
             self.sim = WaterSim(hm.shape, hm.cell_size[0])
-            if self.tex is not None:
-                self.tex.release()
+            for tex in (self.tex, self.vel_tex):
+                if tex is not None:
+                    tex.release()
             self.tex = self.host.float_texture((hm.shape[1], hm.shape[0]))
+            self.vel_tex = self.host.ctx.texture((hm.shape[1], hm.shape[0]), 2, dtype="f4")
+            self.vel_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+            self.vel_tex.repeat_x = self.vel_tex.repeat_y = False
             self._xy = hm.cell_centers()
         cfg = self.host.settings.water
         dt = min(dt, 1 / 20)
@@ -93,17 +99,19 @@ class WaterGame(Game):
         self.sim.advance(hm.heights, dt, 9.81 * cfg.flow_speed, self.drain)
         if cfg.evaporation > 0:
             np.maximum(self.sim.depth - cfg.evaporation * dt, 0, out=self.sim.depth)
-        assert self.tex is not None
+        assert self.tex is not None and self.vel_tex is not None
         self.tex.write(self.sim.depth.tobytes())
+        vx, vy = self.sim.velocity()
+        self.vel_tex.write(np.dstack([blur3(vx), blur3(vy)]).astype(np.float32).tobytes())
 
     def _hand_rain(self, hm, dt: float, rate: float) -> None:
-        """Z každé dlaně nad pískem prší (Gaussův mráček ~ 5 cm). Mráček se plynule rozsvítí / zhasne."""
+        """Ze zvednuté dlaně prší (Gaussův mráček ~ 5 cm). Mráček se plynule rozsvítí / zhasne."""
         assert self._xy is not None and self.sim is not None
         X, Y = self._xy
         alive = set()
         sources = []
         for hand in hm.hand_list:
-            raining = 0.03 < hand.height < 0.45
+            raining = hand.raised
             k = self._cloud_k.get(hand.id, 0.0)
             k = min(1.0, k + dt * 4) if raining else max(0.0, k - dt * 4)
             self._cloud_k[hand.id] = k
@@ -126,13 +134,13 @@ class WaterGame(Game):
     def render(self) -> None:
         if self.tex is None:
             return
-        self.host.draw_fullscreen(self.prog, u_water=(self.tex, 1))
+        self.host.draw_fullscreen(self.prog, u_water=(self.tex, 1), u_vel=(self.vel_tex, 2))
         self.fx.draw(self.host, self.clouds)
         if self.t - self.last_rain > 8.0 and self.sim is not None and self.sim.volume < 0.002:
             p = self.host.painter
             cw, ch = self.host.canvas_size
             size = max(18, ch // 24)
-            p.text("Podrž dlaň nad pískem – začne z ní pršet", cw / 2, ch - size * 0.7, size=size, anchor="bc",
+            p.text("Zvedni ruku vysoko nad písek – začne z ní pršet", cw / 2, ch - size * 0.7, size=size, anchor="bc",
                    bold=True, color=(1, 1, 1, 1), outline=max(2, size // 10), background=(0, 0.05, 0.15, 0.55),
                    padding=size * 0.3)
 

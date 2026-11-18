@@ -241,3 +241,23 @@ def test_window_filter_does_not_leak_passing_hand(sim):
     for _ in range(20):
         hm = proc.process(sim.render_depth(noise=True))
     assert np.abs(hm.heights[8:-8, 8:-8]).max() < 0.004
+
+
+def test_raised_hand_flag_has_hysteresis():
+    """Zvednutá ruka (déšť apod.) až od ~25 cm; při modelování v písku (do ~10 cm) ani těsně nad ním ne."""
+    from sandbox.config import HandSettings
+    from sandbox.terrain.hands import HandTracker, _Detection
+
+    s = HandSettings()
+    tr = HandTracker(s)
+    def hold(h, frames=8):
+        for _ in range(frames):
+            hands = tr.update([_Detection(0.5, 0.4, 0.55, 0.4, h, 100)], 1 / 30)
+        return hands[0].raised
+
+    assert not hold(0.08)  # modelování v písku
+    assert not hold(0.18)  # ruka nad pískem, ale ne zvednutá
+    assert hold(0.32)  # zvednutá
+    assert hold(0.22)  # mírně klesla – pořád zvednutá (hystereze)
+    assert not hold(0.05)
+    assert not hold(0.22)  # zespodu na 22 cm ještě ne

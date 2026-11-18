@@ -51,6 +51,7 @@ class Hand:
     vy: float = 0.0
     age: float = 0.0  # [s] jak dlouho ji sledujeme
     area: int = 0  # počet pixelů paže v bedně
+    raised: bool = False  # ruka je zvednutá nad pískem (ne modelování) – s hysterezí, viz HandSettings
 
     @property
     def pos(self) -> tuple[float, float]:
@@ -117,6 +118,8 @@ class _Track:
         self.palm = np.array([det.x, det.y])
         self.tip = np.array([det.tip_x, det.tip_y])
         self.height = det.height
+        self.raised = False
+        self.s = s
 
     def update(self, det: _Detection, dt: float) -> None:
         self.det = det
@@ -125,11 +128,15 @@ class _Track:
         self.height = 0.6 * self.height + 0.4 * det.height if self.hits else det.height
         self.hits += 1
         self.missed = 0
+        if self.height > self.s.raised_on:
+            self.raised = True
+        elif self.height < self.s.raised_off:
+            self.raised = False
 
     def hand(self) -> Hand:
         v = self.f_palm.dx
         return Hand(self.id, float(self.palm[0]), float(self.palm[1]), float(self.tip[0]), float(self.tip[1]),
-                    float(self.height), float(v[0]), float(v[1]), self.age, self.det.area)
+                    float(self.height), float(v[0]), float(v[1]), self.age, self.det.area, self.raised)
 
 
 class HandTracker:
@@ -266,9 +273,16 @@ class HandDetector:
         dh &= valid[:, 1:] & valid[:, :-1]
         jump[:, 1:] |= dh
         jump[:, :-1] |= dh
-        # Vysoko nad pískem je hlava/tělo nakloněné nad bednou: vyřízne se a paže, které z něj
+        # Vysoko nad pískem může být hlava/tělo nakloněné nad bednou: vyřízne se a paže, které z něj
         # vycházejí, se tím oddělí (každá je pak samostatná ruka; navazují na tělo = vstup).
-        tall = fg & (h > s.max_height)
+        # Tělo se od zvednuté paže liší tloušťkou: hlava/trup je široký, paže a dlaň úzké.
+        tall = fg & (h > s.ceiling)
+        high = fg & (h > s.max_height)
+        if high.any():
+            # u stěny je vysoko vždycky tělo (člověk se nahýbá přes okraj); dál v bedně jen to široké
+            wb = s.wall_band
+            at_wall = (x < x0 + wb) | (x > x1 - wb) | (y < y0 + wb) | (y > y1 - wb)
+            tall |= high & (at_wall | self._thick(high, z))
         core = fg & ~jump & ~tall
 
         dets: list[_Detection] = []
@@ -318,7 +332,28 @@ class HandDetector:
             if full.shape != (H, W):
                 full = np.pad(full, ((0, H - full.shape[0]), (0, W - full.shape[1])), mode="edge")
         self.pixel_mask = full
+        # Výš než max_height nad pískem není nikdy písek (tělo, hlava, nedetekovaná paže) – terén to nesmí převzít.
+        if (fg & (h > s.max_height)).any():
+            body = fg & (h > s.max_height)
+            if ds > 1:
+                body = np.repeat(np.repeat(body, ds, 0), ds, 1)[:self.full_shape[0], :self.full_shape[1]]
+            if body.shape == full.shape:
+                full = full | body
         return hands, full
+
+    def _thick(self, mask: np.ndarray, z: np.ndarray) -> np.ndarray:
+        """Široké části masky (hlava, trup): morfologické otevření kruhem o poloměru ``body_radius``.
+
+        Měřítko pixelu závisí na vzdálenosti od Kinectu, poloměr se proto přepočítá z hloubky."""
+        s = self.s
+        px = z * (self.ds / self.cal.intrinsics.fx)  # [m] velikost pixelu v dané hloubce
+        dist = cv2.distanceTransform(mask.view(np.uint8), cv2.DIST_L2, 3)
+        centers = (dist * px) > s.body_radius
+        if not centers.any():
+            return centers
+        r = int(math.ceil(s.body_radius / float(np.median(px[centers]))))
+        ker = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
+        return cv2.dilate(centers.view(np.uint8), ker).view(bool) & mask
 
     def _arm_ends(self, comp: np.ndarray, entry: np.ndarray, x: np.ndarray, y: np.ndarray, h: np.ndarray,
                   terrain: np.ndarray | None, min_area: int) -> list[_Detection]:
@@ -399,7 +434,7 @@ class HandDetector:
                     iy = np.clip((ys[in_palm] / D * th).astype(np.int32), 0, th - 1)
                     ground = terrain[iy, ix]
                 height = float(np.median(hs[in_palm] - ground)) if in_palm.any() else 0.0
-                if height > s.max_height or (bi > 0 and height > s.branch_max_height):
+                if height > s.ceiling or (bi > 0 and height > s.branch_max_height):
                     continue  # hlava, rameno nebo tělo nakloněné nad bednou
                 taken.append((tx, ty))
                 out.append(_Detection(float(np.clip(px, 0, W)), float(np.clip(py, 0, D)), float(np.clip(tx, 0, W)),

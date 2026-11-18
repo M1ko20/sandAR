@@ -74,27 +74,20 @@ void main() {
     vec2 cl = contours(h);
     c = mix(c, c * 0.55, cl.y * 0.6);
 
-    // voda: moře, jezera, řeky
+    // voda: moře, jezera, řeky – sdílené vykreslení vody (proud po směru toku, průhledné mělčiny)
     vec4 hy = texture(u_hydro, uv);
-    float depth = max(wl - h, sample_bicubic(u_lake, uv) - h);
-    float river = smoothstep(0.30, 0.42, sample_bicubic(u_hydro, uv));
-    float wa = max(smoothstep(0.0, 0.003, depth), river);
-    if (wa > 0.0) {
-        float d01 = clamp(depth / 0.04, 0.0, 1.0);
-        vec3 wc = mix(vec3(0.15, 0.62, 1.0), vec3(0.02, 0.14, 0.62), d01);
-        float wave = sin(p.x * 70.0 + u_clock * 1.7 + 3.0 * vnoise(p * 20.0)) * sin(p.y * 60.0 - u_clock * 1.3);
-        wc += 0.07 * wave * (1.0 - d01);
-        // řeka: protáhlé světlé proužky unášené po proudu
-        vec2 dir = hy.gb;
-        float L = length(dir);
-        dir = L > 1e-3 ? dir / L : vec2(1.0, 0.0);
-        vec2 perp = vec2(-dir.y, dir.x);
-        vec2 q = vec2(dot(p, dir) * 25.0 - u_clock * 2.2, dot(p, perp) * 160.0);
-        float streak = smoothstep(0.55, 0.85, vnoise(q)) * 0.8 + smoothstep(0.6, 0.9, vnoise(q * 1.7 + 13.0)) * 0.5;
-        vec3 rc = mix(vec3(0.05, 0.50, 1.0), vec3(0.75, 0.97, 1.0), clamp(streak, 0.0, 1.0));
-        wc = mix(wc, rc, river * (1.0 - smoothstep(0.0, 0.006, depth)));
-        c = mix(c, wc, wa);
-    }
+    float depth = max(max(wl - h, sample_bicubic(u_lake, uv) - h), 0.0);
+    float river = smoothstep(0.30, 0.45, sample_bicubic(u_hydro, uv));
+    vec2 dir = hy.gb;
+    float L = length(dir);
+    dir = L > 1e-3 ? dir / L : vec2(0.0);
+    // řeka: koryto hloubky ~2–6 mm, proud tím rychlejší, čím je řeka mohutnější
+    float rdepth = river * (0.0025 + 0.004 * clamp(sample_bicubic(u_hydro, uv), 0.0, 1.0));
+    vec2 vel = dir * (0.07 + 0.10 * river) * (1.0 - smoothstep(0.004, 0.012, depth));
+    // klidná voda se jen pomalu vlní (vítr)
+    vel += vec2(0.012, 0.006) * smoothstep(0.004, 0.012, depth);
+    vec4 wr = water_shade(c, uv, max(depth, rdepth), vel, 0.0);
+    c = wr.rgb;
     f_color = vec4(c, 1.0);
 }
 """

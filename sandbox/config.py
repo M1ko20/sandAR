@@ -65,7 +65,12 @@ class HandSettings:
     max_hands_per_arm: int = 3
     branch_max_height: float = 0.15  # [m] vedlejší větev výš nad pískem je rameno/loket, ne druhá ruka
     entry_merge: float = 0.03  # [m] místa vstupu paže přes stěnu bližší než tohle = jedna paže
-    max_height: float = 0.40  # [m] výš nad pískem už to není ruka, ale hlava / tělo nad bednou
+    max_height: float = 0.40  # [m] výš nad pískem se hledá tělo (široké) a odřízne se od paží
+    body_radius: float = 0.065  # [m] širší než 2× tohle = hlava/trup, užší = zvednutá paže/dlaň
+    raised_on: float = 0.25  # [m] výš = zvednutá ruka (déšť apod.); při modelování v písku je dlaň do ~10 cm
+    raised_off: float = 0.20  # [m] níž = už ne zvednutá (hystereze, ať efekt nebliká)
+    wall_band: float = 0.15  # [m] výš než max_height a blíž ke stěně = tělo nahnuté přes okraj
+    ceiling: float = 0.85  # [m] nejvyšší výška ruky nad pískem (Kinect ~1,38 m, vidí od 0,5 m)
     arm_thickness: float = 0.035  # [m] paže/ruka je aspoň tak vysoko nad pískem (nižší a nehybné = písek)
     palm_guard: float = 0.10  # [m] okolí dlaně, které pozadí nikdy nepohltí
     bg_tolerance: float = 0.008  # [m] šum pozadí
@@ -112,9 +117,9 @@ class ChallengeSettings:
 @dataclass
 class WaterSettings:
     rain_rate: float = 0.004  # [m/s] déšť po celém pískovišti
-    hand_rain_rate: float = 0.010  # [m/s] déšť ze středu dlaně (Gaussův mráček, ~0,15 l/s na ruku)
+    hand_rain_rate: float = 0.016  # [m/s] déšť ze středu dlaně (Gaussův mráček)
     evaporation: float = 0.0004  # [m/s]
-    flow_speed: float = 1.0  # násobek gravitace (rychlost toku)
+    flow_speed: float = 3.0  # násobek gravitace (rychlost toku; víc = voda stéká rychleji)
 
 
 @dataclass

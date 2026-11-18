@@ -47,12 +47,8 @@ void main() {
     c = mix(c, c * 0.45, cl.y * 0.6 + cl.x * 0.25);
     float d = sea - h;   // hloubka moře
     if (d > 0.0 && u_active > 0.5) {
-        float d01 = clamp(d / 0.05, 0.0, 1.0);
-        vec3 wc = mix(vec3(0.15, 0.75, 1.0), vec3(0.02, 0.15, 0.55), d01);
-        float rip = vnoise(pm * 40.0 + u_clock * vec2(0.8, 0.5)) - vnoise(pm * 40.0 - u_clock * vec2(0.6, 0.7));
-        wc += 0.08 * rip;
-        float a = smoothstep(0.0, 0.002, d);
-        c = mix(c, wc, a);
+        // sdílené vykreslení vody; mírný proud = vlnky na moři ve větru
+        c = water_shade(c, uv, d, vec2(0.02, 0.01), 0.0).rgb;
     }
     // příboj na pobřeží
     float shore = 1.0 - smoothstep(0.0, 0.004, abs(d));

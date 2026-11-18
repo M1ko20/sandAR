@@ -1,6 +1,6 @@
 """Nejvyšší hora – soutěž, kdo postaví nejvyšší horu (nebo vyhloubí nejhlubší propast).
 
-Kolo trvá 60 s a začne samo, jakmile se někdo dotkne písku (nebo Enter).
+Kolo trvá 30 s a začne samo, jakmile se někdo dotkne písku (nebo Enter).
 Na písku svítí značka na nejvyšším místě a velké číslo v metrech nad mořem
 (podle měřítka mapy: 1 cm písku = 50 m) i ve skutečných centimetrech.
 Po konci kola se výsledek zapíše do ``config/records.json`` (rekord všech dob
@@ -26,7 +26,7 @@ from .base import Game
 
 log = logging.getLogger(__name__)
 
-ROUND = 60.0  # [s] délka kola
+ROUND = 30.0  # [s] délka kola
 RESULT = 12.0  # [s] jak dlouho svítí výsledek
 FINAL_WINDOW = 1.5  # [s] výsledek = nejlepší hodnota z posledních chvil kola (kdyby ruka zakryla vrchol)
 HANDS_TO_START = 0.5  # [s] jak dlouho musí být ruka nad pískem, aby začalo kolo
@@ -129,7 +129,7 @@ class HighestMountainGame(Game):
     description = "Soutěž: kdo za minutu postaví nejvyšší horu? Rekordy dne a všech dob. V = nejhlubší propast."
     order = 85
     category = "soutěž"
-    intro = "Máš 60 sekund – postav co nejvyšší horu a překonej dnešní rekord!"
+    intro = "Máš 30 sekund – postav co nejvyšší horu a překonej dnešní rekord!"
     keys = [("Enter / mezerník", "nové kolo hned"), ("V", "nejvyšší hora / nejhlubší propast"),
             ("X", "ukončit kolo bez zápisu")]
     records_path: Path = CONFIG_DIR / "records.json"
@@ -326,7 +326,7 @@ class HighestMountainGame(Game):
         self._leaderboard(cw, ch, small)
 
         if self.state == "ready":
-            msg = "Dotkni se písku a kolo začne – máš 60 sekund!"
+            msg = "Dotkni se písku a kolo začne – máš 30 sekund!"
             p.text(msg, cw / 2, ch - mid * 1.0, size=mid, anchor="mc", bold=True, color=(1, 1, 1, 1),
                    outline=3, background=(0, 0, 0, 0.55), padding=mid * 0.3)
         elif self.state == "result":

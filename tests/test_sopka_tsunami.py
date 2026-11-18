@@ -225,7 +225,7 @@ def test_volcano_cycle_erupts_and_resets(host):
     host.update_heightmap(hm)
     game = VolcanoGame(host)
     game.start()
-    for _ in range(30 * 12):  # první klid je krátký -> probouzení -> erupce
+    for _ in range(30 * 21):  # úvodní slajd 5 s + odpočet 15 s (klid + probouzení) -> erupce
         game.update(hm, 1 / 30)
     assert game.eruptions == 1
     assert game.sim is not None and game.sim.volume > 0
@@ -238,15 +238,25 @@ def test_volcano_cycle_erupts_and_resets(host):
     game.stop()
 
 
-def test_volcano_hand_wakes_volcano(host):
-    from sandbox.games.sopka import RUMBLE, VolcanoGame
+def test_volcano_countdown_marks_highest_peak(host):
+    """Sopka = nejvyšší vrchol, 15 s odpočet (12 s klid + 3 s probouzení) po úvodním slajdu (5 s),
+    ruka ji nespustí ani nepřestěhuje."""
+    from sandbox.games.sopka import CALM, COUNTDOWN, ERUPT, RUMBLE, VolcanoGame
 
+    assert COUNTDOWN == pytest.approx(15.0)
     hm = _heightmap(hands=True)
     game = VolcanoGame(host)
     game.start()
-    for _ in range(40):
+    for _ in range(30 * 2):
+        game.update(hm, 1 / 30)
+    assert game.phase == CALM
+    assert abs(game.vent_m[0] - 0.5) < 0.03 and abs(game.vent_m[1] - 0.3) < 0.03
+    for _ in range(30 * 16):
         game.update(hm, 1 / 30)
     assert game.phase == RUMBLE
+    for _ in range(30 * 3):
+        game.update(hm, 1 / 30)
+    assert game.phase == ERUPT
     game.stop()
 
 
@@ -268,4 +278,45 @@ def test_tsunami_cycle_floods_and_reports(host):
     assert any("zaplaveno" in s for s in game.status())
     game.reset()
     assert game.phase == CALM
+    game.stop()
+
+
+def test_tsunami_sea_and_towns_stay_while_building(host):
+    """Během klidu se strana moře ani města nemění, i když lidé přestavují terén."""
+    from sandbox.games.tsunami import CALM, TsunamiGame
+    from sandbox.terrain.heightmap import HeightMap
+
+    hm = _heightmap()
+    game = TsunamiGame(host)
+    game.start()
+    game.update(hm, 1 / 30)
+    edge, towns = game.edge, list(game.towns)
+    rng = np.random.default_rng(3)
+    for _ in range(3 * 30):
+        noisy = HeightMap(hm.heights + rng.normal(0, 0.004, hm.heights.shape).astype(np.float32), hm.size)
+        game.update(noisy, 1 / 30)
+        if game.phase != CALM:
+            break
+        assert game.edge == edge and game.towns == towns
+    game.stop()
+
+
+def test_volcano_vent_does_not_jump_to_slightly_higher_peak(host):
+    from sandbox.games.sopka import VolcanoGame
+    from sandbox.terrain.heightmap import HeightMap
+
+    base = cone(60, 100, 30, 30, 0.08, 15) - 0.01
+    game = VolcanoGame(host)
+    game.start()
+    for _ in range(30):
+        game.update(HeightMap(base, (1.0, 0.6)), 1 / 30)
+    assert abs(game.vent_m[0] - 0.3) < 0.03
+    slightly = np.maximum(base, cone(60, 100, 30, 70, 0.085, 15) - 0.01)
+    for _ in range(30):
+        game.update(HeightMap(slightly, (1.0, 0.6)), 1 / 30)
+    assert abs(game.vent_m[0] - 0.3) < 0.03  # o 5 mm vyšší kopec sopku nepřestěhuje
+    clearly = np.maximum(base, cone(60, 100, 30, 70, 0.12, 15) - 0.01)
+    for _ in range(30):
+        game.update(HeightMap(clearly, (1.0, 0.6)), 1 / 30)
+    assert abs(game.vent_m[0] - 0.7) < 0.03  # zřetelně vyšší ano
     game.stop()
